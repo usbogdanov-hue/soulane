@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="SuleynAttackSkill" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/attack_skill.gd" id="1_skill"]
+
+[resource]
+script = ExtResource("1_skill")
+display_name = "Дальний выпад"
+skill_power = 110
+damage_type = 0
+mana_cost = 25
+min_range = 1
+max_range = 2
+concussion_chance_pct = 0.0
+concussion_skipped_turns = 0

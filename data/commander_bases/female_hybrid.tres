@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="SuleynCommanderBaseStats" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/commander_base_stats.gd" id="1_base"]
+
+[resource]
+script = ExtResource("1_base")
+display_name = "Гибрид-женщина"
+base_str = 6
+base_agi = 8
+base_wis = 8
+base_int = 6
+base_hp = 190
+base_mp = 75

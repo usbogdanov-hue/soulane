@@ -1,0 +1,19 @@
+[gd_resource type="Resource" script_class="SuleynCommanderProfile" load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/commander_profile.gd" id="1_profile"]
+[ext_resource type="Resource" path="res://data/commander_bases/female_warrior.tres" id="2_base"]
+
+[ext_resource type="Resource" path="res://data/passives/female_critical_x2.tres" id="3_passive"]
+
+[resource]
+script = ExtResource("1_profile")
+critical_passive = ExtResource("3_passive")
+archetype = 1
+level = 25
+base_stats = ExtResource("2_base")
+armor_type = 1
+class_matter = 0
+points_str = 12
+points_agi = 45
+points_wis = 10
+points_int = 5

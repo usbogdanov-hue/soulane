@@ -1,0 +1,7 @@
+# Keep text Godot resources consistent across operating systems
+*.gd text eol=lf
+*.tscn text eol=lf
+*.tres text eol=lf
+*.godot text eol=lf
+*.md text eol=lf
+*.py text eol=lf

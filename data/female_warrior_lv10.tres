@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="SuleynCommanderProfile" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/commander_profile.gd" id="1_profile"]
+
+[ext_resource type="Resource" path="res://data/commander_bases/female_warrior.tres" id="2_base"]
+
+[ext_resource type="Resource" path="res://data/equipment/water_sword.tres" id="3_water_sword"]
+[ext_resource type="Resource" path="res://data/equipment/water_shield.tres" id="4_water_shield"]
+
+[resource]
+script = ExtResource("1_profile")
+class_matter = 1
+matter_equipment = Array[Resource]([ExtResource("3_water_sword"), ExtResource("4_water_shield")])
+archetype = 1
+level = 10
+base_stats = ExtResource("2_base")
+armor_type = 3
+points_str = 0
+points_agi = 0
+points_wis = 0
+points_int = 0

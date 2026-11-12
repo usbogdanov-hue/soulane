@@ -1,0 +1,19 @@
+[gd_resource type="Resource" script_class="SuleynUnitStats" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/unit_stats.gd" id="1_stats"]
+[ext_resource type="Resource" path="res://data/male_warrior_lv10.tres" id="2_commander"]
+
+[ext_resource type="Resource" path="res://data/skills/male_sword.tres" id="3_skill"]
+
+[ext_resource type="Resource" path="res://data/spells/fire_strike.tres" id="4_spell"]
+
+[resource]
+script = ExtResource("1_stats")
+magic_spell = ExtResource("4_spell")
+display_name = "Мужчина-воин (красный)"
+commander = ExtResource("2_commander")
+melee_skill = ExtResource("3_skill")
+max_hp = 20
+attack = 7
+defense = 2
+movement = 2

@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="SuleynMonsterProfile" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/monster_profile.gd" id="1_monster"]
+
+[resource]
+script = ExtResource("1_monster")
+display_name = "Сокол (тест)"
+base_pdef_pct = 20.0
+base_mdef_pct = 10.0
+evasion_pct = 20.0
+physical_damage_bonus_pct = 10.0
+crit_chance_pct = 5.0
+max_mp = 0
+categories = 1
+matter = 2

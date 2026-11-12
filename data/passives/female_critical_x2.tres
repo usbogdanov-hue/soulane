@@ -1,0 +1,8 @@
+[gd_resource type="Resource" script_class="SuleynCriticalPassive" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/critical_passive.gd" id="1_passive"]
+
+[resource]
+script = ExtResource("1_passive")
+display_name = "Точный выпад — пассивный крит ×2"
+crit_multiplier = 2.0

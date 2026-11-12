@@ -1,0 +1,8 @@
+[gd_resource type="Resource" script_class="SuleynMatterItem" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/matter_item.gd" id="1_item"]
+
+[resource]
+script = ExtResource("1_item")
+display_name = "Меч Воды"
+matter = 3

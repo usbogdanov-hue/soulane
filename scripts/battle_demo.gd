@@ -1,0 +1,858 @@
+extends Node2D
+## SULEYN v1.4: switchable monster encounters plus universal evasion and concussion scheduling,
+## attack animation, HP/MP under units and a scrollable combat journal.
+## Gameplay mathematics remain in battle_combat.gd and damage_calculator.gd.
+
+const Hex = preload("res://scripts/hex_math.gd")
+const BattleBoard = preload("res://scripts/battle_board.gd")
+const BattleTurns = preload("res://scripts/battle_turns.gd")
+const BattleUnit = preload("res://scripts/battle_unit.gd")
+const BattleCombat = preload("res://scripts/battle_combat.gd")
+const Matter = preload("res://scripts/matter_rules.gd")
+const Rules = preload("res://scripts/combat_rules.gd")
+
+const INVALID_CELL = Vector2i(-1, -1)
+const ALLY_ID = "ally_1"
+const ENEMY_ID = "enemy_1"
+const TEST_FALCON = preload("res://data/monsters/falcon_unit_v14.tres")
+const TEST_HELLHOUND = preload("res://data/monsters/hellhound_unit_v14.tres")
+const TEST_LICH = preload("res://data/monsters/lich_unit_v14.tres")
+const BOARD_ORIGIN = Vector2(106.0, 178.0)
+const LOG_POSITION = Vector2(898.0, 545.0)
+const LOG_SIZE = Vector2(487.0, 268.0)
+
+const BACKGROUND = Color(0.060, 0.079, 0.112)
+const HEX_DARK = Color(0.15, 0.24, 0.26)
+const HEX_LIGHT = Color(0.18, 0.28, 0.29)
+const HEX_EDGE = Color(0.36, 0.48, 0.49)
+const AVAILABLE = Color(0.23, 0.52, 0.44)
+const HOVER = Color(0.54, 0.65, 0.79)
+const ALLY = Color(0.30, 0.55, 0.91)
+const ENEMY = Color(0.84, 0.40, 0.44)
+const WHITE = Color(0.93, 0.95, 0.95)
+const MUTED = Color(0.64, 0.73, 0.76)
+const PATH_COLOR = Color(0.99, 0.82, 0.38)
+const ATTACK_COLOR = Color(0.96, 0.43, 0.31)
+const HEALTH_COLOR = Color(0.52, 0.93, 0.60)
+const MANA_COLOR = Color(0.48, 0.74, 1.0)
+
+@export_range(4, 20, 1) var demo_columns: int = 9
+@export_range(3, 14, 1) var demo_rows: int = 7
+@export_range(20.0, 55.0, 1.0) var hex_radius: float = 35.0
+@export var ally_stats: SuleynUnitStats = preload("res://data/demo_male_lv25.tres")
+@export var enemy_stats: SuleynUnitStats = preload("res://data/demo_female_lv25.tres")
+## 0 = original duel, 1 = falcon, 2 = hellhound, 3 = lich. T cycles.
+var encounter_index: int = 0
+
+func encounter_enemy_stats() -> SuleynUnitStats:
+    match encounter_index:
+        1: return TEST_FALCON
+        2: return TEST_HELLHOUND
+        3: return TEST_LICH
+    return enemy_stats
+
+func switch_encounter() -> void:
+    encounter_index = (encounter_index + 1) % 4
+    reset_demo()
+
+var board
+var turns
+var units: Dictionary = {}
+var selected_unit_id: String = ""
+var hovered_cell: Vector2i = INVALID_CELL
+var reachable: Dictionary = {}
+var battle_over: bool = false
+var winner_side: String = ""
+var message: String = ""
+var casting_mode: bool = false
+var special_mode: bool = false
+var visual_clock: float = 0.0
+
+var journal: RichTextLabel
+var animation_time: float = 1.0
+const ANIMATION_DURATION: float = 0.44
+# Hold a newly stunned unit's turn in view before skipping it.
+# This prevents the first skip from disappearing instantaneously after an attack.
+const CONCUSSION_PREVIEW_SECONDS: float = 0.95
+const CONCUSSION_NOTICE_SECONDS: float = 1.30
+var concussion_skip_pending: bool = false
+var concussion_preview_time: float = 0.0
+var concussion_notice_time: float = 0.0
+var concussion_notice_text: String = ""
+var animation_attacker: String = ""
+var animation_defender: String = ""
+var animation_target_position: Vector2 = Vector2.ZERO
+var animation_direction: Vector2 = Vector2.RIGHT
+var animation_damage: int = 0
+var animation_evaded: bool = false
+var animation_crit: bool = false
+var animation_stunned: bool = false
+
+
+func _ready() -> void:
+    create_journal()
+    reset_demo()
+
+
+func create_journal() -> void:
+    journal = RichTextLabel.new()
+    journal.name = "BattleLog"
+    journal.position = LOG_POSITION
+    journal.size = LOG_SIZE
+    journal.bbcode_enabled = true
+    journal.scroll_following = true
+    journal.selection_enabled = true
+    journal.fit_content = false
+    journal.mouse_filter = Control.MOUSE_FILTER_STOP
+    journal.add_theme_font_size_override("normal_font_size", 14)
+    journal.add_theme_color_override("default_color", WHITE)
+    journal.add_theme_color_override("font_selected_color", Color(0.92, 0.95, 1.0))
+    journal.add_theme_stylebox_override("normal", StyleBoxEmpty.new())
+    add_child(journal)
+
+
+func log_event(body: String, tint: String = "#dce5e7") -> void:
+    if journal == null:
+        return
+    journal.append_text("[color=%s]%s[/color]\n" % [tint, body])
+
+
+func reset_demo() -> void:
+    board = BattleBoard.new(demo_columns, demo_rows)
+    var center_row: int = demo_rows / 2
+    board.add_unit(ALLY_ID, Vector2i(1, center_row))
+    board.add_unit(ENEMY_ID, Vector2i(demo_columns - 2, center_row))
+    units.clear()
+    units[ALLY_ID] = make_unit(ALLY_ID, "blue", ally_stats)
+    units[ENEMY_ID] = make_unit(ENEMY_ID, "red", encounter_enemy_stats())
+    turns = BattleTurns.new([ALLY_ID, ENEMY_ID])
+    selected_unit_id = ""
+    hovered_cell = INVALID_CELL
+    reachable.clear()
+    battle_over = false
+    winner_side = ""
+    casting_mode = false
+    special_mode = false
+    visual_clock = 0.0
+    animation_stunned = false
+    animation_time = ANIMATION_DURATION
+    concussion_skip_pending = false
+    concussion_preview_time = 0.0
+    concussion_notice_time = 0.0
+    concussion_notice_text = ""
+    animation_attacker = ""
+    animation_defender = ""
+    message = "Мужчина начинает. ЛКМ — выбрать, затем зелёный гекс или врага рядом."
+    if journal != null:
+        journal.clear()
+    log_event("═══ НОВЫЙ БОЙ · v1.4 · СЦЕНАРИЙ %d/4 ═══" % (encounter_index + 1), "#ffdc86")
+    log_event("T — сменить противника: женщина / Сокол / Адская гончая / Лич.", "#ffda87")
+    log_event("Мужчина: булава (дробящее), тяжёлая броня, сила 100.")
+    var foe = units[ENEMY_ID]
+    log_event("Противник: %s; материя — %s; PDEF %.0f%%, MDEF %.0f%%." % [
+        unit_label(ENEMY_ID), Matter.matter_name(foe.matter), foe.base_pdef_pct, foe.base_mdef_pct])
+    log_event("Входящий урон мужчины: PDEF против %s = %.0f%%." % [
+        Rules.damage_type_name(foe.melee_damage_type).to_lower(),
+        units[ALLY_ID].physical_defense_pct(foe.melee_damage_type)], "#9cd9fb")
+    log_event("Мужчина против %s (дробящее): PDEF %.0f%%." % [
+        unit_label(ENEMY_ID), foe.physical_defense_pct(Rules.BLUNT)], "#9cd9fb")
+    if foe.is_monster:
+        log_event("ТЕСТОВЫЕ параметры монстра, не утвержденный баланс. Броня отсутствует.", "#ffda87")
+        log_event("Категория монстра: %d; PDEF vs колющее / рубящее / дробящее: %.0f / %.0f / %.0f%%." % [
+            foe.monster_categories, foe.physical_defense_pct(Rules.PIERCING),
+            foe.physical_defense_pct(Rules.SLASHING), foe.physical_defense_pct(Rules.BLUNT)], "#a4def5")
+    else:
+        log_event("Женщина: лёгкая броня, копьё, крит 27,5% ×2, Дальний выпад (2).", "#a4def5")
+    log_event("1 — удар силой 100; 2 — дополнительное умение, если есть; F — магия; R — рестарт.")
+    log_event("Уклонение всех 5–90%; контузия — 2 отдельных пропуска.", "#ffda87")
+    queue_redraw()
+
+
+func make_unit(unit_id: String, side: String, stats: SuleynUnitStats):
+    var health: int = stats.max_hp
+    if stats.commander != null:
+        health = stats.commander.max_hp()
+    var unit = BattleUnit.new(unit_id, side, health, stats.attack,
+        stats.defense, stats.movement, stats.display_name)
+    if stats.magic_spell != null:
+        unit.spell_power = stats.magic_spell.spell_power
+        unit.spell_mana_cost = stats.magic_spell.mana_cost
+        if stats.magic_spell.magic_book != null:
+            unit.spell_matter = stats.magic_spell.magic_book.matter
+    unit.special_skill = stats.special_skill
+    if stats.melee_skill != null:
+        unit.melee_skill_power = stats.melee_skill.skill_power
+        unit.melee_damage_type = stats.melee_skill.damage_type
+    else:
+        unit.melee_skill_power = stats.attack
+    if stats.monster != null and stats.commander == null:
+        unit.is_monster = true
+        unit.monster_categories = stats.monster.categories
+        unit.base_pdef_pct = stats.monster.base_pdef_pct
+        unit.base_mdef_pct = stats.monster.base_mdef_pct
+        unit.display_name = stats.monster.display_name
+        unit.matter = stats.monster.matter
+        unit.evasion_pct = Rules.final_evasion(stats.monster.evasion_pct)
+        unit.physical_damage_bonus_pct = Rules.cap_percent(stats.monster.physical_damage_bonus_pct)
+        unit.crit_chance_pct = Rules.cap_chance(stats.monster.crit_chance_pct)
+        unit.max_mp = maxi(0, stats.monster.max_mp)
+        unit.mp = unit.max_mp
+        if stats.monster.critical_passive != null:
+            unit.critical_multiplier = stats.monster.critical_passive.crit_multiplier
+    if stats.commander != null:
+        if not stats.commander.valid_allocation():
+            push_warning("Некорректный бюджет очков: %s" % stats.display_name)
+        unit.level = stats.commander.level
+        unit.matter = stats.commander.resolved_matter()
+        unit.critical_multiplier = stats.commander.critical_multiplier()
+        unit.max_mp = stats.commander.max_mp()
+        unit.mp = unit.max_mp
+        unit.armor = stats.commander.armor_name()
+        unit.attributes = stats.commander.primary_stats()
+        unit.unspent_points = stats.commander.points_unspent()
+        var a: Dictionary = unit.attributes
+        unit.physical_damage_bonus_pct = minf(90.0, float(a["STR"]) * 2.0)
+        unit.evasion_pct = Rules.final_evasion(float(a["AGI"]) * 0.5 + float(stats.commander.armor_evasion_bonus()))
+        unit.crit_chance_pct = clampf(float(a["AGI"]) * 0.5, 0.0, 90.0)
+        unit.physical_resistance_pct = 0.0
+        unit.base_pdef_pct = 0.0
+        unit.base_mdef_pct = 0.0
+        unit.armor_pdef_pct = float(stats.commander.armor_pdef_bonus())
+        unit.armor_mdef_pct = float(stats.commander.armor_mdef_bonus())
+        unit.armor_weapon_bonuses = {
+            0: float(stats.commander.armor_weapon_bonus(0)),
+            1: float(stats.commander.armor_weapon_bonus(1)),
+            2: float(stats.commander.armor_weapon_bonus(2)),
+        }
+        unit.magic_power_pct = minf(90.0, float(a["INT"]) * 2.0)
+        unit.mana_regen_pct = clampf(float(a["WIS"]) * 0.3, 0.0, 90.0)
+        unit.magic_resistance_pct = minf(90.0, float(a["WIS"]) * 2.0)
+    return unit
+
+
+func _process(delta: float) -> void:
+    visual_clock += delta
+    if animation_time < ANIMATION_DURATION:
+        animation_time = minf(ANIMATION_DURATION, animation_time + delta)
+        queue_redraw()
+    if concussion_notice_time > 0.0:
+        concussion_notice_time = maxf(0.0, concussion_notice_time - delta)
+        queue_redraw()
+    if concussion_skip_pending:
+        # Do not spend a skipped turn while the hit animation is still playing.
+        # The target keeps BOTH pending skips (and visible stars) until the pause ends.
+        if animation_time >= ANIMATION_DURATION:
+            concussion_preview_time -= delta
+            if concussion_preview_time <= 0.0:
+                resolve_one_concussion_skip()
+        queue_redraw()
+    else:
+        for unit_id in units:
+            if units[unit_id].is_alive() and units[unit_id].concussion_turns_remaining > 0:
+                queue_redraw()  # Rotate stars between the first and second skip.
+                break
+
+
+func _unhandled_input(event: InputEvent) -> void:
+    if event is InputEventMouseMotion:
+        var new_hover: Vector2i = cell_under_cursor()
+        if new_hover != hovered_cell:
+            hovered_cell = new_hover
+            queue_redraw()
+    elif event is InputEventMouseButton:
+        if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+            click_cell(cell_under_cursor())
+    elif event is InputEventKey:
+        if event.pressed and not event.echo:
+            if event.keycode == KEY_R:
+                reset_demo()
+            elif event.keycode == KEY_T:
+                switch_encounter()
+            elif event.keycode == KEY_SPACE:
+                pass_turn()
+            elif event.keycode == KEY_M:
+                debug_spend_mana()
+            elif event.keycode == KEY_1:
+                casting_mode = false
+                special_mode = false
+                message = "Режим: ОБЫЧНЫЙ УДАР, сила 100, бесплатно, дистанция 1."
+                log_event("Режим → обычная физическая атака (1).", "#b3d5e5")
+                queue_redraw()
+            elif event.keycode == KEY_2:
+                casting_mode = false
+                special_mode = true
+                message = "Режим: ДОПОЛНИТЕЛЬНОЕ УМЕНИЕ (2). Дальность зависит от героя."
+                log_event("Режим → дополнительное физическое умение (2).", "#b3d5e5")
+                queue_redraw()
+            elif event.keycode == KEY_F:
+                casting_mode = not casting_mode
+                if casting_mode:
+                    special_mode = false
+                var mode: String = "МАГИЯ" if casting_mode else "ОБЫЧНЫЙ УДАР"
+                message = "Режим: %s." % mode
+                log_event("Режим атаки → %s." % mode, "#b3d5e5")
+                queue_redraw()
+
+
+func cell_under_cursor() -> Vector2i:
+    var point: Vector2 = get_local_mouse_position() - BOARD_ORIGIN
+    var cell: Vector2i = Hex.pixel_to_axial(point, hex_radius)
+    if not board.contains(cell):
+        return INVALID_CELL
+    var center: Vector2 = Hex.axial_to_pixel(cell, hex_radius)
+    if not Hex.point_in_hex(point, center, hex_radius):
+        return INVALID_CELL
+    return cell
+
+
+func click_cell(cell: Vector2i) -> void:
+    if battle_over or concussion_skip_pending or not board.contains(cell) or animation_time < ANIMATION_DURATION:
+        return
+    var active: String = turns.active_unit_id()
+    var clicked_unit: String = board.unit_at(cell)
+    if clicked_unit == active:
+        selected_unit_id = active
+        refresh_reachable()
+        message = "%s выбран. 1 — обычный удар; 2 — умение за MP (дальность до 2 у женщины)." % unit_label(active)
+    elif not clicked_unit.is_empty():
+        if selected_unit_id != active:
+            message = "Сначала выберите активного героя: %s." % unit_label(active)
+        elif not can_target_with_mode(active, clicked_unit):
+            message = "Цель вне дальности! Обычный удар — 1 гекс; умение женщины — до 2."
+        else:
+            attack_enemy(active, clicked_unit)
+    elif selected_unit_id == active:
+        if not reachable.has(cell):
+            message = "Гекс недоступен или вне тестового радиуса перемещения."
+        else:
+            var steps: int = reachable[cell]
+            var round_before: int = turns.round_number
+            if steps == 0:
+                message = "Выберите другой гекс или нажмите Space для пропуска."
+            elif board.move_unit(active, cell):
+                turns.spend_action(active)
+                var regen: int = end_active_turn(active)
+                clear_selection()
+                message = "%s переместился на %d гекса. Теперь ходит %s." % [
+                    unit_label(active), steps, unit_label(turns.active_unit_id())]
+                log_event("Раунд %d · %s: движение на %d гекса; MP +%d." % [
+                    round_before, unit_label(active), steps, regen], "#b9d6ec")
+            else:
+                message = "Не удалось переместиться."
+    else:
+        message = "Выберите %s; 1 — удар, 2 — умение, F — магия." % unit_label(active)
+    queue_redraw()
+
+
+func can_target_with_mode(attacker_id: String, defender_id: String) -> bool:
+    if casting_mode:
+        return BattleCombat.can_melee(board, units, attacker_id, defender_id)
+    var skill: SuleynAttackSkill = units[attacker_id].special_skill if special_mode else null
+    return BattleCombat.can_physical(board, units, attacker_id, defender_id, skill)
+
+
+func attack_enemy(attacker_id: String, defender_id: String) -> void:
+    var attack_is_magic: bool = casting_mode
+    var attack_is_special: bool = special_mode and not attack_is_magic
+    var defender_location: Vector2 = center_of(board.position_of(defender_id))
+    var attacker_location: Vector2 = center_of(board.position_of(attacker_id))
+    var round_before: int = turns.round_number
+    var result: Dictionary = {}
+    if attack_is_magic:
+        result = BattleCombat.magic_attack(board, units, attacker_id, defender_id)
+    elif attack_is_special:
+        result = BattleCombat.skill_attack(board, units, attacker_id, defender_id,
+            units[attacker_id].special_skill)
+    else:
+        result = BattleCombat.melee_attack(board, units, attacker_id, defender_id)
+    if not result.get("ok", false):
+        message = str(result.get("reason", "Атака невозможна."))
+        log_event("%s: %s" % [unit_label(attacker_id), message], "#ffac96")
+        return
+
+    animation_time = 0.0
+    animation_attacker = attacker_id
+    animation_defender = defender_id
+    animation_direction = (defender_location - attacker_location).normalized()
+    animation_target_position = defender_location
+    animation_damage = int(result.get("damage", 0))
+    animation_evaded = bool(result.get("evaded", false))
+    animation_crit = bool(result.get("critical", false))
+    animation_stunned = bool(result.get("concussion_applied", false))
+
+    var attacker = units[attacker_id]
+    var defender = units[defender_id]
+    var attack_name: String = "магия" if attack_is_magic else str(result.get("skill_name", "Обычный удар"))
+    var skill_power: int = int(result.get("spell_power", 0)) if attack_is_magic else int(result.get("skill_power", 0))
+    var cost: int = int(result.get("spell_cost", 0)) if attack_is_magic else int(result.get("skill_cost", 0))
+    log_event("[b]Раунд %d · %s → %s[/b] · %s (сила %d; расход %d MP)" % [
+        round_before, unit_label(attacker_id), unit_label(defender_id), attack_name, skill_power, cost], "#ffe7a5")
+
+    if not attack_is_magic:
+        var dodge_pct: float = float(result.get("evasion_percent", defender.evasion_pct))
+        var dodge_roll: float = float(result.get("dodge_roll", -1.0))
+        log_event("  Уклонение: шанс %.1f%%, бросок %.2f." % [dodge_pct, dodge_roll])
+        if result["evaded"]:
+            log_event("  [b]УКЛОНЕНИЕ![/b] Урон 0; HP %d/%d." % [defender.hp, defender.max_hp], "#86e9c0")
+        else:
+            log_event("  Крит: шанс %.1f%%, бросок %.2f. PDEF цели %.1f%%." % [
+                float(result["critical_percent"]), float(result["crit_roll"]),
+                float(result["pdef_percent"])])
+            if result["critical"]:
+                log_event("  [b]КРИТ ×%.2f![/b]" % float(result["critical_multiplier"]), "#ffbd73")
+            if float(result.get("concussion_chance_pct", 0.0)) > 0.0 and not bool(result.get("defeated", false)):
+                log_event("  Контузия: шанс %.0f%%, бросок %.2f." % [
+                    float(result["concussion_chance_pct"]), float(result["concussion_roll"])])
+                if bool(result.get("concussion_applied", false)):
+                    log_event("  [b]КОНТУЗИЯ![/b] Цель пропустит 2 своих хода.", "#ffd36e")
+    else:
+        log_event("  Книга: %s · MDEF цели %.1f%% · критов и уклонений нет." % [
+            Matter.matter_name(attacker.spell_matter), float(result["mdef_percent"])])
+
+    turns.spend_action(attacker_id)
+    var regen: int = attacker.regenerate_mana_end_turn()
+    if not result["evaded"]:
+        var overkill_note: String = " (расчёт %d)" % int(result["calculated_damage"]) if int(result["damage"]) != int(result["calculated_damage"]) else ""
+        log_event("  Урон: [b]%d HP[/b]%s. У цели осталось %d/%d HP." % [
+            int(result["damage"]), overkill_note, defender.hp, defender.max_hp], "#ffb5b5")
+    log_event("  %s: MP %d/%d (регенерация +%d)." % [
+        unit_label(attacker_id), attacker.mp, attacker.max_mp, regen], "#9dc8ff")
+
+    if result["evaded"]:
+        advance_turn(attacker_id)
+        message = "%s УВЕРНУЛСЯ от атаки %s!" % [unit_label(defender_id), unit_label(attacker_id)]
+    elif result["defeated"]:
+        turns.remove_unit(defender_id)
+        if not opponents_alive(attacker.side):
+            battle_over = true
+            winner_side = attacker.side
+            message = "%s победил! Нажмите R для нового боя." % unit_label(attacker_id)
+            log_event("  [b]ПОБЕДА: %s![/b]" % unit_label(attacker_id), "#ffe080")
+        else:
+            advance_turn(attacker_id)
+            message = "%s повержен." % unit_label(defender_id)
+    else:
+        advance_turn(attacker_id)
+        var crit_notice: String = " КРИТ!" if result["critical"] else ""
+        var stun_notice: String = " КОНТУЗИЯ!" if bool(result.get("concussion_applied", false)) else ""
+        message = "%s наносит %d урона %s.%s%s" % [unit_label(attacker_id),
+            int(result["damage"]), unit_label(defender_id), crit_notice, stun_notice]
+    clear_selection()
+
+
+func end_active_turn(unit_id: String) -> int:
+    var regenerated: int = units[unit_id].regenerate_mana_end_turn()
+    advance_turn(unit_id)
+    return regenerated
+
+
+func advance_turn(previous_id: String) -> void:
+    if turns.next_turn(previous_id):
+        prepare_next_concussion_skip()
+
+
+func prepare_next_concussion_skip() -> void:
+    # A concussion skip is a separate, visible turn event. Do not decrement
+    # the counter immediately after the attack that inflicted the condition.
+    concussion_skip_pending = false
+    if battle_over:
+        return
+    var active: String = turns.active_unit_id()
+    if active.is_empty() or not units.has(active):
+        return
+    var unit = units[active]
+    if unit.is_alive() and unit.concussion_turns_remaining > 0:
+        concussion_skip_pending = true
+        concussion_preview_time = CONCUSSION_PREVIEW_SECONDS
+        clear_selection()
+        queue_redraw()
+
+
+func resolve_one_concussion_skip() -> void:
+    # Called once per stunned character's turn opportunity, never twice for
+    # the same opportunity. The next skip can only occur after the other hero acts.
+    if not concussion_skip_pending:
+        return
+    concussion_skip_pending = false
+    concussion_preview_time = 0.0
+    if battle_over:
+        return
+    var active: String = turns.active_unit_id()
+    if active.is_empty() or not units.has(active):
+        return
+    var unit = units[active]
+    if not unit.skip_concussed_turn():
+        return
+    var round_before: int = turns.round_number
+    var skip_total: int = maxi(1, unit.concussion_total_turns)
+    var skip_number: int = skip_total - unit.concussion_turns_remaining
+    var regen: int = unit.regenerate_mana_end_turn()
+    concussion_notice_text = "%s: ПРОПУСК %d из %d!" % [unit_label(active), skip_number, skip_total]
+    concussion_notice_time = CONCUSSION_NOTICE_SECONDS
+    message = "%s пропускает ход %d из %d (контузия). Осталось: %d." % [
+        unit_label(active), skip_number, skip_total, unit.concussion_turns_remaining]
+    log_event("[b]Раунд %d · %s: ПРОПУСК %d из %d (КОНТУЗИЯ)![/b] Осталось: %d. MP +%d." % [
+        round_before, unit_label(active), skip_number, skip_total,
+        unit.concussion_turns_remaining, regen], "#ffda87")
+    clear_selection()
+    if turns.next_turn(active):
+        prepare_next_concussion_skip()
+    queue_redraw()
+
+
+func debug_spend_mana() -> void:
+    if battle_over or concussion_skip_pending:
+        return
+    var active: String = turns.active_unit_id()
+    if active.is_empty():
+        return
+    if units[active].spend_mana(20):
+        message = "%s потратил 20 MP. Регенерация произойдёт в конце хода." % unit_label(active)
+        log_event("%s потратил 20 MP (тест). Осталось %d/%d." % [
+            unit_label(active), units[active].mp, units[active].max_mp], "#b0cdf5")
+    else:
+        message = "Недостаточно MP для тестового расхода."
+    queue_redraw()
+
+
+func opponents_alive(attacker_side: String) -> bool:
+    for unit_id in units:
+        var unit = units[unit_id]
+        if unit.side != attacker_side and unit.is_alive():
+            return true
+    return false
+
+
+func pass_turn() -> void:
+    if battle_over or concussion_skip_pending or animation_time < ANIMATION_DURATION:
+        return
+    var active: String = turns.active_unit_id()
+    if active.is_empty():
+        return
+    var round_before: int = turns.round_number
+    var regen: int = end_active_turn(active)
+    clear_selection()
+    message = "%s пропустил ход (MP +%d). Теперь ходит %s." % [
+        unit_label(active), regen, unit_label(turns.active_unit_id())]
+    log_event("Раунд %d · %s: ПРОПУСК ХОДА (MP +%d)." % [
+        round_before, unit_label(active), regen], "#bac7d9")
+    queue_redraw()
+
+
+func clear_selection() -> void:
+    selected_unit_id = ""
+    reachable.clear()
+
+
+func unit_label(unit_id: String) -> String:
+    if unit_id == ALLY_ID:
+        return "Мужчина"
+    if unit_id == ENEMY_ID:
+        if units.has(ENEMY_ID) and units[ENEMY_ID].is_monster:
+            return units[ENEMY_ID].display_name
+        return "Женщина"
+    return unit_id
+
+
+func refresh_reachable() -> void:
+    reachable.clear()
+    if not battle_over and selected_unit_id == turns.active_unit_id():
+        reachable = board.reachable_from(
+            board.position_of(selected_unit_id), units[selected_unit_id].movement, selected_unit_id)
+
+
+func _draw() -> void:
+    draw_rect(Rect2(Vector2.ZERO, Vector2(1440, 900)), BACKGROUND)
+    draw_rect(Rect2(Vector2(28, 98), Vector2(823, 679)), Color(0.10, 0.14, 0.18), true)
+    draw_rect(Rect2(Vector2(879, 98), Vector2(530, 735)), Color(0.12, 0.18, 0.23), true)
+    draw_text(Vector2(35, 47), "СУЛЭЙН  /  ПЕРВЫЕ МОНСТРЫ И МАТЕРИИ", 27, WHITE)
+    draw_text(Vector2(36, 78), "v1.4 · T — СМЕНА ПРОТИВНИКА · УДАР 100 · КОНТУЗИЯ/МАТЕРИЯ", 16, MUTED)
+
+    for r in range(board.rows):
+        for q in range(board.columns):
+            var cell := Vector2i(q, r)
+            var center: Vector2 = center_of(cell)
+            var points: PackedVector2Array = hex_vertices(center)
+            var fill: Color = HEX_DARK if (q + r) % 2 == 0 else HEX_LIGHT
+            if board.blocked.has(cell):
+                fill = Color(0.25, 0.25, 0.28)
+            elif reachable.has(cell) and board.unit_at(cell).is_empty():
+                fill = AVAILABLE
+            if cell == hovered_cell:
+                fill = fill.lerp(HOVER, 0.45)
+            draw_colored_polygon(points, fill)
+            var outline: PackedVector2Array = points.duplicate()
+            outline.append(points[0])
+            draw_polyline(outline, HEX_EDGE, 1.4, true)
+
+    draw_hover_path()
+    draw_unit(ALLY_ID, ALLY)
+    draw_unit(ENEMY_ID, ENEMY)
+    draw_damage_popup()
+    draw_concussion_turn_notice()
+    draw_sidebar()
+    draw_instructions()
+
+
+func draw_hover_path() -> void:
+    if battle_over or selected_unit_id != turns.active_unit_id() or not reachable.has(hovered_cell):
+        return
+    var path: Array[Vector2i] = board.shortest_path(
+        board.position_of(selected_unit_id), hovered_cell, selected_unit_id)
+    for i in range(1, path.size()):
+        draw_line(center_of(path[i - 1]), center_of(path[i]), PATH_COLOR, 4.0, true)
+
+
+func draw_unit(unit_id: String, fill: Color) -> void:
+    if not units.has(unit_id) or not units[unit_id].is_alive():
+        return
+    var cell: Vector2i = board.position_of(unit_id)
+    if not board.contains(cell):
+        return
+    var center: Vector2 = center_of(cell)
+    if selected_unit_id == unit_id:
+        draw_arc(center, hex_radius * 0.88, 0.0, TAU, 48, PATH_COLOR, 3.0, true)
+    if not battle_over and turns.active_unit_id() == unit_id:
+        draw_arc(center, hex_radius * 0.98, 0.0, TAU, 48, PATH_COLOR, 2.0, true)
+    if selected_unit_id != "" and selected_unit_id != unit_id:
+        if can_target_with_mode(selected_unit_id, unit_id):
+            draw_arc(center, hex_radius * 1.06, 0.0, TAU, 48, ATTACK_COLOR, 3.0, true)
+
+    var phase: float = animation_time / ANIMATION_DURATION
+    var lunge: float = 0.0
+    var shake: float = 0.0
+    if animation_time < ANIMATION_DURATION:
+        if unit_id == animation_attacker:
+            lunge = sin(PI * phase) * 15.0
+        elif unit_id == animation_defender and not animation_evaded:
+            shake = sin(phase * PI * 8.0) * 3.5 * (1.0 - phase)
+        elif unit_id == animation_defender and animation_evaded:
+            lunge = -sin(PI * phase) * 10.0
+    var animated_center: Vector2 = center + animation_direction * (lunge + shake)
+    if units[unit_id].is_monster:
+        draw_monster_figurine(animated_center, units[unit_id].monster_categories, units[unit_id].matter)
+    else:
+        draw_hero_figurine(animated_center, unit_id == ALLY_ID, fill)
+    draw_vitals(center, units[unit_id])
+    if units[unit_id].concussion_turns_remaining > 0:
+        draw_concussion_stars(animated_center, units[unit_id].concussion_turns_remaining)
+
+
+func draw_hero_figurine(center: Vector2, heavy_male: bool, team_color: Color) -> void:
+    # Drawn entirely with Godot primitives, no external textures or fonts.
+    # Looking right: heavy man with mace. Looking left: light woman with spear.
+    var face: float = 1.0 if heavy_male else -1.0
+    var dark: Color = Color(0.13, 0.19, 0.23)
+    var skin: Color = Color(0.95, 0.73, 0.59)
+    var local: Vector2 = center + Vector2(0, -10)
+    draw_circle(center + Vector2(0, 13), 13.0, Color(0.02, 0.05, 0.07, 0.55))
+    draw_rect(Rect2(local + Vector2(-10, 10), Vector2(8, 13)), dark)
+    draw_rect(Rect2(local + Vector2(3, 10), Vector2(8, 13)), dark)
+    draw_rect(Rect2(local + Vector2(-11, 16), Vector2(10, 6)), Color(0.25, 0.27, 0.30))
+    draw_rect(Rect2(local + Vector2(3, 16), Vector2(10, 6)), Color(0.25, 0.27, 0.30))
+    # torso armor
+    var torso: PackedVector2Array = PackedVector2Array([
+        local + Vector2(-14, -4), local + Vector2(14, -4),
+        local + Vector2(12, 14), local + Vector2(-12, 14)])
+    draw_colored_polygon(torso, Color(0.66, 0.72, 0.81) if heavy_male else team_color)
+    draw_line(local + Vector2(-10, 5), local + Vector2(10, 5),
+        Color(0.29, 0.34, 0.41) if heavy_male else Color(0.95, 0.76, 0.39), 3.0)
+    draw_rect(Rect2(local + Vector2(-16, -3), Vector2(5, 15)),
+        Color(0.50, 0.56, 0.67) if heavy_male else skin)
+    draw_rect(Rect2(local + Vector2(11, -3), Vector2(5, 15)),
+        Color(0.50, 0.56, 0.67) if heavy_male else skin)
+    draw_circle(local + Vector2(0, -15), 10.5, skin)
+    if heavy_male:
+        draw_rect(Rect2(local + Vector2(-11, -24), Vector2(22, 8)), Color(0.66, 0.73, 0.81))
+        draw_rect(Rect2(local + Vector2(-9, -19), Vector2(18, 4)), Color(0.38, 0.45, 0.54))
+        draw_line(local + Vector2(0, -19), local + Vector2(0, -12), dark, 2.0)
+        # mace, raised to the right
+        draw_line(local + Vector2(face * 13, 3), local + Vector2(face * 25, -17), Color(0.65, 0.47, 0.27), 4.0)
+        draw_circle(local + Vector2(face * 27, -19), 7.0, Color(0.72, 0.76, 0.81))
+        draw_line(local + Vector2(face * 23, -22), local + Vector2(face * 31, -22), dark, 2.0)
+    else:
+        # ponytail, leather light armor and a long spear
+        draw_circle(local + Vector2(8, -17), 8.0, Color(0.43, 0.20, 0.17))
+        draw_rect(Rect2(local + Vector2(-9, -26), Vector2(18, 7)), Color(0.49, 0.26, 0.19))
+        draw_line(local + Vector2(face * 8, 7), local + Vector2(face * 32, -16), Color(0.66, 0.45, 0.22), 3.0)
+        var tip := PackedVector2Array([
+            local + Vector2(face * 32, -24),
+            local + Vector2(face * 27, -12),
+            local + Vector2(face * 38, -18)])
+        draw_colored_polygon(tip, Color(0.84, 0.88, 0.90))
+    # colored waist stripe makes team differentiation obvious.
+    draw_line(local + Vector2(-10, 12), local + Vector2(10, 12), team_color, 3.0)
+
+
+func draw_monster_figurine(center: Vector2, categories: int, material: int) -> void:
+    # Test-only primitive silhouettes: winged bird, quadruped, undead spellcaster.
+    var body_color: Color = Color(0.58, 0.76, 0.83) if material == Matter.WIND else (
+        Color(0.86, 0.40, 0.28) if material == Matter.FIRE else Color(0.56, 0.42, 0.73))
+    draw_circle(center + Vector2(0, 15), 13.0, Color(0.02, 0.05, 0.07, 0.55))
+    if (categories & Rules.FLYING) != 0:
+        var left_wing: PackedVector2Array = PackedVector2Array([
+            center + Vector2(-5, -5), center + Vector2(-36, -23),
+            center + Vector2(-25, 5), center + Vector2(-7, 9)])
+        var right_wing: PackedVector2Array = PackedVector2Array([
+            center + Vector2(5, -5), center + Vector2(36, -23),
+            center + Vector2(25, 5), center + Vector2(7, 9)])
+        draw_colored_polygon(left_wing, body_color)
+        draw_colored_polygon(right_wing, body_color)
+        draw_circle(center + Vector2(0, -6), 12.0, body_color)
+        draw_circle(center + Vector2(0, -18), 7.0, body_color.lightened(0.2))
+        draw_colored_polygon(PackedVector2Array([center + Vector2(-3, -18),
+            center + Vector2(4, -18), center + Vector2(1, -10)]), Color(1, 0.75, 0.22))
+    elif (categories & Rules.MAGICAL_UNDEAD) != 0:
+        draw_colored_polygon(PackedVector2Array([center + Vector2(0, -30),
+            center + Vector2(-18, 20), center + Vector2(18, 20)]), body_color)
+        draw_circle(center + Vector2(0, -15), 11.0, Color(0.16, 0.14, 0.23))
+        draw_circle(center + Vector2(-4, -16), 2.0, Color(0.53, 0.96, 0.97))
+        draw_circle(center + Vector2(4, -16), 2.0, Color(0.53, 0.96, 0.97))
+        draw_line(center + Vector2(20, 19), center + Vector2(22, -26), Color(0.84, 0.76, 0.60), 4.0)
+    else:
+        draw_circle(center + Vector2(-2, -6), 16.0, body_color)
+        draw_circle(center + Vector2(12, -17), 10.0, body_color)
+        draw_line(center + Vector2(-12, 0), center + Vector2(-18, 18), body_color.darkened(0.2), 5.0)
+        draw_line(center + Vector2(9, 0), center + Vector2(15, 18), body_color.darkened(0.2), 5.0)
+        draw_circle(center + Vector2(15, -19), 2.5, Color(0.96, 0.88, 0.27))
+
+
+func draw_concussion_stars(center: Vector2, remaining: int) -> void:
+    # Procedurally animated five-point stars, no image assets required.
+    var drift: float = visual_clock * 2.6
+    for i in range(3):
+        var orbit: float = drift + float(i) * TAU / 3.0
+        var star_center: Vector2 = center + Vector2(
+            cos(orbit) * 19.0, -49.0 + sin(orbit) * 4.0)
+        draw_five_point_star(star_center, 6.0, drift * 0.5 + float(i), Color(1.0, 0.86, 0.29))
+    draw_text(center + Vector2(-36, -62), "КОНТУЗИЯ ×%d" % remaining, 11, PATH_COLOR)
+
+
+func draw_concussion_turn_notice() -> void:
+    if not concussion_skip_pending and concussion_notice_time <= 0.0:
+        return
+    var text_line: String = concussion_notice_text
+    if concussion_skip_pending:
+        var active: String = turns.active_unit_id()
+        if units.has(active):
+            var unit = units[active]
+            var total: int = maxi(1, unit.concussion_total_turns)
+            var current: int = total - unit.concussion_turns_remaining + 1
+            text_line = "%s КОНТУЖЕН: пропуск %d из %d" % [unit_label(active), current, total]
+    draw_rect(Rect2(Vector2(120, 105), Vector2(690, 47)), Color(0.30, 0.21, 0.08, 0.95), true)
+    draw_rect(Rect2(Vector2(120, 105), Vector2(690, 47)), PATH_COLOR, false, 2.0)
+    draw_text(Vector2(137, 135), text_line, 20, PATH_COLOR)
+
+
+func draw_five_point_star(at: Vector2, radius: float, turn: float, fill: Color) -> void:
+    var star := PackedVector2Array()
+    for point_index in range(10):
+        var direction: float = -PI / 2.0 + turn + float(point_index) * PI / 5.0
+        var size: float = radius if point_index % 2 == 0 else radius * 0.43
+        star.append(at + Vector2(cos(direction), sin(direction)) * size)
+    draw_colored_polygon(star, fill)
+
+
+func draw_vitals(center: Vector2, unit) -> void:
+    var rect: Rect2 = Rect2(center + Vector2(-35, 23), Vector2(70, 27))
+    draw_rect(rect, Color(0.055, 0.092, 0.14, 0.93), true)
+    draw_rect(rect, Color(0.49, 0.56, 0.63, 0.73), false, 1.0)
+    draw_text(center + Vector2(-30, 34), "HP %d/%d" % [unit.hp, unit.max_hp], 10, HEALTH_COLOR)
+    draw_text(center + Vector2(-30, 46), "MP %d/%d" % [unit.mp, unit.max_mp], 10, MANA_COLOR)
+
+
+func draw_damage_popup() -> void:
+    if animation_time >= ANIMATION_DURATION:
+        return
+    var phase: float = animation_time / ANIMATION_DURATION
+    var at: Vector2 = animation_target_position + Vector2(-39, -48 - 20 * phase)
+    var txt: String = "УКЛОН!" if animation_evaded else ("КРИТ -%d" % animation_damage if animation_crit else "-%d HP" % animation_damage)
+    draw_rect(Rect2(at + Vector2(-3, -18), Vector2(122, 24)), Color(0.03, 0.05, 0.07, 0.85), true)
+    draw_text(at, txt, 18, HEALTH_COLOR if animation_evaded else (PATH_COLOR if animation_crit else Color(1.0, 0.57, 0.54)))
+    if animation_stunned:
+        draw_text(at + Vector2(0, -21), "КОНТУЗИЯ!", 13, PATH_COLOR)
+
+
+func draw_sidebar() -> void:
+    var active: String = turns.active_unit_id()
+    draw_text(Vector2(899, 134), "РАУНД %d" % turns.round_number, 20, PATH_COLOR)
+    if battle_over:
+        draw_text(Vector2(1110, 134), "ПОБЕДА: %s" % unit_label(ALLY_ID if winner_side == "blue" else ENEMY_ID), 16, PATH_COLOR)
+    else:
+        var turn_caption: String = "ПРОПУСК: %s" if concussion_skip_pending else "ХОДИТ: %s"
+        draw_text(Vector2(1110, 134), turn_caption % unit_label(active), 16, PATH_COLOR if concussion_skip_pending else WHITE)
+    draw_text(Vector2(900, 158), "БОЙЦЫ / ПАРАМЕТРЫ УДАРА", 15, MUTED)
+    draw_commander_row(ALLY_ID, ALLY, 193)
+    draw_commander_row(ENEMY_ID, ENEMY, 356)
+    draw_rect(Rect2(Vector2(893, 520), Vector2(503, 305)), Color(0.055, 0.090, 0.13), true)
+    var mode: String = "МАГИЯ" if casting_mode else ("УМЕНИЕ (2)" if special_mode else "ОБЫЧНЫЙ (1)")
+    draw_text(Vector2(901, 498), "ВЫБРАН РЕЖИМ: %s" % mode, 16, PATH_COLOR)
+    draw_text(Vector2(903, 537), "ЖУРНАЛ БОЯ  /  MP, КРИТЫ, КОНТУЗИЯ", 15, PATH_COLOR)
+
+
+func draw_commander_row(unit_id: String, fill: Color, y: float) -> void:
+    var u = units[unit_id]
+    if u.is_monster:
+        draw_monster_row(unit_id, fill, y)
+        return
+    var a: Dictionary = u.attributes
+    var name: String = unit_label(unit_id)
+    var weapon: String = Rules.damage_type_name(u.melee_damage_type)
+    draw_rect(Rect2(Vector2(895, y - 22), Vector2(498, 141)), Color(0.18, 0.24, 0.29), true)
+    draw_circle(Vector2(910, y - 5), 8.0, fill)
+    draw_text(Vector2(926, y), "%s  ·  %d уровень" % [name, u.level], 18, WHITE)
+    draw_text(Vector2(902, y + 22), "%s | %s | сила умения %d" % [u.armor, weapon, u.melee_skill_power], 14, MUTED)
+    draw_text(Vector2(902, y + 43), "HP %d/%d     MP %d/%d" % [u.hp, u.max_hp, u.mp, u.max_mp], 16, WHITE)
+    draw_text(Vector2(902, y + 63), "STR %d   AGI %d   WIS %d   INT %d" % [
+        int(a.get("STR", 0)), int(a.get("AGI", 0)), int(a.get("WIS", 0)), int(a.get("INT", 0))], 15, WHITE)
+    draw_text(Vector2(902, y + 83), "Физ. бонус +%.0f%%   Уклонение %.1f%%   Крит %.1f%%" % [
+        u.physical_damage_bonus_pct, u.final_evasion_pct(), u.crit_chance_pct], 14, PATH_COLOR)
+    var incoming_type: int = Rules.PIERCING if unit_id == ALLY_ID else Rules.BLUNT
+    draw_text(Vector2(902, y + 104), "PDEF против %s: %.0f%%  |  MDEF: %.0f%%  |  КРИТ ×%.1f" % [
+        Rules.damage_type_name(incoming_type).to_lower(),
+        u.physical_defense_pct(incoming_type), u.magic_defense_pct(), u.critical_multiplier], 13, WHITE)
+    if u.special_skill != null:
+        var ability: SuleynAttackSkill = u.special_skill
+        draw_text(Vector2(902, y + 116), "2: %s · %d MP · %d–%d гекс.  %s" % [
+            ability.display_name, ability.mana_cost, ability.min_range, ability.max_range,
+            "КОНТУЗИЯ %d ход." % u.concussion_turns_remaining if u.concussion_turns_remaining > 0 else ""], 12, PATH_COLOR)
+
+
+func draw_monster_row(unit_id: String, fill: Color, y: float) -> void:
+    var u = units[unit_id]
+    draw_rect(Rect2(Vector2(895, y - 22), Vector2(498, 141)), Color(0.18, 0.24, 0.29), true)
+    draw_circle(Vector2(910, y - 5), 8.0, fill)
+    draw_text(Vector2(926, y), unit_label(unit_id), 18, WHITE)
+    draw_text(Vector2(902, y + 22), "МОНСТР · %s · %s" % [
+        Matter.matter_name(u.matter), Rules.damage_type_name(u.melee_damage_type)], 14, MUTED)
+    draw_text(Vector2(902, y + 43), "HP %d/%d    MP %d/%d    Уклонение %.1f%%" % [
+        u.hp, u.max_hp, u.mp, u.max_mp, u.final_evasion_pct()], 14, WHITE)
+    draw_text(Vector2(902, y + 63), "Base PDEF %.0f%% · Base MDEF %.0f%% · Без брони" % [
+        u.base_pdef_pct, u.base_mdef_pct], 14, WHITE)
+    draw_text(Vector2(902, y + 84), "PDEF колющее %.0f%%, рубящее %.0f%%, дробящее %.0f%%" % [
+        u.physical_defense_pct(Rules.PIERCING), u.physical_defense_pct(Rules.SLASHING),
+        u.physical_defense_pct(Rules.BLUNT)], 13, PATH_COLOR)
+    draw_text(Vector2(902, y + 105), "Крит %.1f%% ×%.1f · сила удара %d · MP+%.1f%%" % [
+        u.crit_chance_pct, u.critical_multiplier, u.melee_skill_power, u.mana_regen_pct], 13, MUTED)
+
+
+func draw_instructions() -> void:
+    draw_text(Vector2(40, 810), "ЛКМ: герой → зелёный гекс (движение) / противник (удар)", 17, WHITE)
+    draw_text(Vector2(40, 839), "1 — удар 100    2 — умение    F — магия    Space — пропуск    R — сброс    T — монстр", 15, MUTED)
+    draw_text(Vector2(40, 872), message, 16, PATH_COLOR)
+
+
+func center_of(cell: Vector2i) -> Vector2:
+    return BOARD_ORIGIN + Hex.axial_to_pixel(cell, hex_radius)
+
+
+func hex_vertices(center: Vector2) -> PackedVector2Array:
+    var vertices := PackedVector2Array()
+    for i in range(6):
+        var angle: float = deg_to_rad(-90.0 + 60.0 * float(i))
+        vertices.append(center + Vector2(cos(angle), sin(angle)) * hex_radius)
+    return vertices
+
+
+func draw_text(at: Vector2, value: String, font_size: int, color: Color) -> void:
+    draw_string(ThemeDB.fallback_font, at, value, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, color)

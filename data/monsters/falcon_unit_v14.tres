@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="SuleynUnitStats" load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/unit_stats.gd" id="1_stats"]
+[ext_resource type="Resource" path="res://data/monsters/falcon_v14.tres" id="2_monster"]
+[ext_resource type="Resource" path="res://data/skills/falcon_v14.tres" id="3_skill"]
+
+[resource]
+script = ExtResource("1_stats")
+display_name = "Сокол (тест)"
+monster = ExtResource("2_monster")
+melee_skill = ExtResource("3_skill")
+max_hp = 450
+attack = 100
+defense = 0
+movement = 4

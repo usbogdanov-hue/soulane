@@ -1,0 +1,19 @@
+[gd_resource type="Resource" script_class="SuleynCommanderProfile" load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/commander_profile.gd" id="1_profile"]
+
+[ext_resource type="Resource" path="res://data/commander_bases/male_warrior.tres" id="2_base"]
+
+[ext_resource type="Resource" path="res://data/equipment/fire_sword.tres" id="3_fire_sword"]
+
+[resource]
+script = ExtResource("1_profile")
+matter_equipment = Array[Resource]([ExtResource("3_fire_sword")])
+archetype = 0
+level = 10
+base_stats = ExtResource("2_base")
+armor_type = 2
+points_str = 0
+points_agi = 0
+points_wis = 0
+points_int = 0

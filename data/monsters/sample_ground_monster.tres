@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="SuleynMonsterProfile" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/monster_profile.gd" id="1_monster"]
+
+[resource]
+script = ExtResource("1_monster")
+display_name = "Образец наземного монстра (тест)"
+base_pdef_pct = 20.0
+base_mdef_pct = 10.0
+categories = 2
+matter = 0

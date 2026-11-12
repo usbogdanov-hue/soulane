@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="SuleynMonsterProfile" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/monster_profile.gd" id="1_monster"]
+
+[resource]
+script = ExtResource("1_monster")
+display_name = "Лич (тест)"
+base_pdef_pct = 10.0
+base_mdef_pct = 40.0
+evasion_pct = 5.0
+physical_damage_bonus_pct = 0.0
+crit_chance_pct = 0.0
+max_mp = 100
+categories = 4
+matter = 5

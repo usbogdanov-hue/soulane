@@ -1,0 +1,20 @@
+[gd_resource type="Resource" script_class="SuleynUnitStats" load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://scripts/unit_stats.gd" id="1_stats"]
+[ext_resource type="Resource" path="res://data/female_warrior_lv25.tres" id="2_commander"]
+[ext_resource type="Resource" path="res://data/skills/female_spear_100.tres" id="3_skill"]
+[ext_resource type="Resource" path="res://data/spells/dark_strike.tres" id="4_spell"]
+
+[ext_resource type="Resource" path="res://data/skills/female_long_thrust.tres" id="5_special"]
+
+[resource]
+script = ExtResource("1_stats")
+magic_spell = ExtResource("4_spell")
+display_name = "Воин (женщина)"
+commander = ExtResource("2_commander")
+melee_skill = ExtResource("3_skill")
+special_skill = ExtResource("5_special")
+max_hp = 590
+attack = 100
+defense = 0
+movement = 3

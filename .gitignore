@@ -1,0 +1,26 @@
+# Godot generated caches (Godot 4.x)
+.godot/
+.import/
+
+# C# / IDE / operating system generated files
+.mono/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Python audit caches
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Exported game binaries and builds
+builds/
+exports/
+*.pck
+*.exe
+*.app/
+
+# Temporary files
+*.tmp
+*.bak

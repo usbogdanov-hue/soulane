@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="SuleynUnitStats" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/unit_stats.gd" id="1_stats"]
+[ext_resource type="Resource" path="res://data/monsters/lich_v14.tres" id="2_monster"]
+[ext_resource type="Resource" path="res://data/skills/lich_v14.tres" id="3_skill"]
+[ext_resource type="Resource" path="res://data/spells/dark_strike.tres" id="4_spell"]
+
+[resource]
+script = ExtResource("1_stats")
+display_name = "Лич (тест)"
+monster = ExtResource("2_monster")
+melee_skill = ExtResource("3_skill")
+magic_spell = ExtResource("4_spell")
+max_hp = 500
+attack = 100
+defense = 0
+movement = 2

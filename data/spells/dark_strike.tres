@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="SuleynMagicSpell" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/magic_spell.gd" id="1_spell"]
+[ext_resource type="Resource" path="res://data/magic_books/dark.tres" id="2_book"]
+
+[resource]
+script = ExtResource("1_spell")
+display_name = "Теневой удар (демо)"
+spell_power = 20
+mana_cost = 10
+magic_book = ExtResource("2_book")
