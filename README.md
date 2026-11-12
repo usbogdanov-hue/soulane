@@ -1,4 +1,6 @@
-# СУЛЭЙН — рабочая разработка v1.5
+# СУЛЭЙН — рабочая v1.5
+
+12 ноября 2026 года пользователь принял **v1.5 с исправлением Inspector** как рабочую версию. Сохранённая база — ветка `working/v1.5`; игровой код соответствует проверенному коммиту `c62a578`. PR #3 объединён с веткой v1.5; перенос в `main` ожидает отдельного подтверждения для PR #1. Текущий статус: [docs/CHAT_CONTEXT.md](docs/CHAT_CONTEXT.md).
 
 Пошаговый тактический прототип на гексах, Godot 4.3+. По умолчанию запускается **бой 3 на 3**:
 
@@ -37,10 +39,13 @@
 ```sh
 python3 tests/offline_audit_v14.py
 godot --headless --editor --path . --import
+godot --headless --path . --script res://tests/test_unified_inspector.gd
 godot --headless --path . --script res://tests/test_v13.gd
 godot --headless --path . --script res://tests/test_monsters_v14.gd
 godot --headless --path . --script res://tests/test_turns_v15.gd
 godot --headless --path . --script res://tests/test_teams_v15.gd
 ```
 
-Проверки v1.3–v1.5 выполнены в Godot 4.6.3. Подробности и известная ошибка старого теста Inspector: [docs/V15_VALIDATION.md](docs/V15_VALIDATION.md). Запуск именно на Godot 4.3 и пользовательская проверка v1.5 пока не выполнены.
+После исправления Inspector в Godot 4.6.3 проходят **15/15** тестовых файлов, **989** проверок, в том числе Inspector **84/84**; статический аудит — **334/334**. Новый отчёт: [docs/INSPECTOR_LEVEL_VALIDATION.md](docs/INSPECTOR_LEVEL_VALIDATION.md). В пяти старых тестах остаются прежние сообщения освобождения ресурсов; они описаны в отчёте.
+
+[docs/V15_VALIDATION.md](docs/V15_VALIDATION.md) сохранён как историческая проверка исходной v1.5. Принятие текущей версии как рабочей отделяется от её личного запуска пользователем: последний подтверждённый запуск — v1.2.1. Именно Godot 4.3 и ручное окно после исправления Inspector не проверялись.
