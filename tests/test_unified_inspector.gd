@@ -12,6 +12,11 @@ func _initialize() -> void:
     test_connected_base_resources()
     test_editor_preview_properties()
     test_points_limit_and_level_decrease()
+    test_level_decrease_priority_boundaries()
+    test_repeated_level_decrease_and_increase()
+    test_level_decrease_with_unspent_points()
+    test_nested_base_caps_preserve_other_allocations()
+    test_replaced_base_caps_before_level_decrease()
     test_edit_shared_base_without_changing_archetype()
     if failures == 0:
         print("SULEYN v0.9: %d unified Inspector checks passed." % checks)
@@ -64,6 +69,122 @@ func test_points_limit_and_level_decrease() -> void:
     check(p.max_hp() == 490 and p.max_mp() == 83, "HP/MP growth after level decrease")
     p.level = 10
     check(p.points_unspent() == 15, "points reopen after level increase")
+
+func test_level_decrease_priority_boundaries() -> void:
+    var scenarios: Array = [
+        {"level": 9, "points": [6, 6, 6, 6], "hp": 450, "mp": 121},
+        {"level": 6, "points": [6, 6, 3, 0], "hp": 435, "mp": 85},
+        {"level": 4, "points": [6, 3, 0, 0], "hp": 425, "mp": 81},
+        {"level": 2, "points": [3, 0, 0, 0], "hp": 385, "mp": 77},
+        {"level": 1, "points": [0, 0, 0, 0], "hp": 350, "mp": 75},
+    ]
+    for scenario in scenarios:
+        var p = Profile.new()
+        p.archetype = 1
+        p.level = 10
+        p.points_str = 6
+        p.points_agi = 6
+        p.points_wis = 6
+        p.points_int = 9
+        p.level = scenario["level"]
+        var label: String = "level 10 -> %d" % p.level
+        check([p.points_str, p.points_agi, p.points_wis, p.points_int] == scenario["points"],
+            label + " preserves STR > AGI > WIS > INT")
+        check(p.valid_allocation() and p.points_unspent() == 0,
+            label + " retains the full available budget")
+        check(p.max_hp() == scenario["hp"] and p.max_mp() == scenario["mp"]
+            and p.get("final_max_hp") == scenario["hp"] and p.get("final_max_mp") == scenario["mp"],
+            label + " updates HP/MP and Inspector previews")
+
+func test_repeated_level_decrease_and_increase() -> void:
+    var p = Profile.new()
+    p.archetype = 1
+    p.level = 10
+    p.points_str = 18
+    p.points_agi = 9
+    p.level = 5
+    p.level = 3
+    check([p.points_str, p.points_agi, p.points_wis, p.points_int] == [6, 0, 0, 0]
+        and p.valid_allocation(), "repeated decreases preserve the highest-priority points")
+    p.level = 1
+    check(p.points_spent() == 0 and p.points_earned() == 0 and p.valid_allocation(),
+        "level one clears every allocated point")
+    p.level = 10
+    check(p.points_spent() == 0 and p.points_unspent() == 27,
+        "increasing after a reset returns unspent points without restoring allocations")
+    check(p.max_hp() == 395 and p.max_mp() == 93,
+        "HP/MP growth after a reset retains base and level formulas")
+
+func test_level_decrease_with_unspent_points() -> void:
+    var p = Profile.new()
+    p.archetype = 1
+    p.level = 10
+    p.points_str = 2
+    p.points_agi = 3
+    p.points_wis = 1
+    p.points_int = 2
+    p.level = 5
+    check([p.points_str, p.points_agi, p.points_wis, p.points_int] == [2, 3, 1, 2],
+        "a sufficient reduced budget preserves every allocation")
+    check(p.points_unspent() == 4 and p.valid_allocation(),
+        "a sufficient reduced budget keeps unused points available")
+    check(p.max_hp() == 390 and p.max_mp() == 93,
+        "under-budget allocation retains STR/INT HP/MP contributions")
+    p.level = 5
+    check([p.points_str, p.points_agi, p.points_wis, p.points_int] == [2, 3, 1, 2],
+        "reapplying the same level leaves allocations unchanged")
+
+func test_nested_base_caps_preserve_other_allocations() -> void:
+    var p = Profile.new()
+    p.archetype = 1
+    p.base_stats = Profile.BASES[1].duplicate()
+    p.level = 10
+    p.points_str = 6
+    p.points_agi = 6
+    p.points_wis = 6
+    p.points_int = 9
+    p.base_stats.base_str = 43
+    check([p.points_str, p.points_agi, p.points_wis, p.points_int] == [2, 6, 6, 9],
+        "a nested STR cap edit returns only excess STR points")
+    check(p.primary_stats()["STR"] == 45 and p.points_unspent() == 4 and p.valid_allocation(),
+        "nested STR edit enforces the hard cap and returns points to the budget")
+    p.base_stats.base_int = 43
+    check([p.points_str, p.points_agi, p.points_wis, p.points_int] == [2, 6, 6, 2],
+        "a nested INT cap edit preserves unrelated allocations")
+    check(p.primary_stats()["INT"] == 45 and p.points_unspent() == 11 and p.valid_allocation(),
+        "nested INT edit enforces the hard cap and returns points to the budget")
+    check(p.max_hp() == 765 and p.max_mp() == 298,
+        "capped base edits preserve HP/MP formulas")
+    p.level = 5
+    check([p.points_str, p.points_agi, p.points_wis, p.points_int] == [2, 6, 4, 0],
+        "level decrease after cap edits still prioritizes STR > AGI > WIS > INT")
+    check(p.points_unspent() == 0 and p.valid_allocation(),
+        "level decrease after cap edits uses the new budget")
+    check(p.max_hp() == 740 and p.max_mp() == 278,
+        "level decrease after cap edits recalculates HP/MP")
+
+func test_replaced_base_caps_before_level_decrease() -> void:
+    var scenarios: Array = [
+        {"base_str": 40, "points": [5, 7, 0, 0], "unspent": 0},
+        {"base_str": 45, "points": [0, 9, 0, 0], "unspent": 3},
+    ]
+    for scenario in scenarios:
+        var p = Profile.new()
+        p.archetype = 1
+        p.level = 10
+        p.points_str = 18
+        p.points_agi = 9
+        var replacement = Profile.BASES[1].duplicate()
+        replacement.base_str = scenario["base_str"]
+        p.base_stats = replacement
+        p.level = 5
+        var label: String = "replaced base STR%d" % replacement.base_str
+        check([p.points_str, p.points_agi, p.points_wis, p.points_int] == scenario["points"],
+            label + " caps STR before assigning the reduced budget")
+        check(p.points_unspent() == scenario["unspent"] and p.valid_allocation(),
+            label + " preserves AGI points that fit the reduced budget")
+        check(p.max_hp() == 740 and p.max_mp() == 83,
+            label + " retains capped STR and HP/MP formulas")
 
 func test_edit_shared_base_without_changing_archetype() -> void:
     var p = Profile.new()

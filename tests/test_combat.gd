@@ -56,12 +56,12 @@ func test_range_and_allies() -> void:
     check(not Combat.can_melee(board, units, "A", "B"), "cannot attack ally")
     check(not Combat.can_melee(board, units, "A", "A"), "cannot attack self")
     check(not Combat.can_melee(board, units, "missing", "E"), "unknown attacker rejected")
-    check(not Combat.melee_attack(board, units, "A", "E")["ok"], "out-of-range hit rejected")
+    check(not Combat.melee_attack(board, units, "A", "E", 99.0, 99.0)["ok"], "out-of-range hit rejected")
     check(units["E"].hp == 20, "invalid attack deals zero damage")
     check(board.move_unit("E", Vector2i(2, 1)), "enemy moved into adjacency")
     check(Hex.hex_distance(board.position_of("A"), board.position_of("E")) == 1, "hex neighbor")
     check(Combat.can_melee(board, units, "A", "E"), "adjacent enemy can be attacked")
-    var result: Dictionary = Combat.melee_attack(board, units, "A", "E")
+    var result: Dictionary = Combat.melee_attack(board, units, "A", "E", 99.0, 99.0)
     check(result["ok"] and result["damage"] == 5, "physical demo hit applies 5 damage")
     check(result["remaining_hp"] == 15 and not result["defeated"], "enemy survives hit")
 
@@ -74,7 +74,7 @@ func test_death_and_occupancy() -> void:
         "A": Unit.new("A", "blue", 10, 5),
         "E": Unit.new("E", "red", 5, 5),
     }
-    var result: Dictionary = Combat.melee_attack(board, units, "A", "E")
+    var result: Dictionary = Combat.melee_attack(board, units, "A", "E", 99.0, 99.0)
     check(result["ok"] and result["defeated"], "lethal strike defeats target")
     check(units["E"].hp == 0, "target HP is zero")
     check(board.unit_at(Vector2i(2, 1)).is_empty(), "dead enemy frees hex")

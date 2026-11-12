@@ -94,25 +94,21 @@ func _refresh_preview() -> void:
 
 
 func _trim_points_to_budget() -> void:
-    # STR/INT hard caps also hold if a nested base record changes.
-    points_str = mini(points_str, maxi(0, 45 - int(base_record()["str"])))
-    points_int = mini(points_int, maxi(0, 45 - int(base_record()["int"])))
-    # При уменьшении уровня излишек возвращается автоматически.
-    # Приоритет сохранения STR > AGI > WIS > INT.
-    var overflow: int = maxi(0, points_spent() - points_earned())
-    if overflow == 0:
-        return
-    var take: int = mini(overflow, points_int)
-    points_int -= take
-    overflow -= take
-    take = mini(overflow, points_wis)
-    points_wis -= take
-    overflow -= take
-    take = mini(overflow, points_agi)
-    points_agi -= take
-    overflow -= take
-    if overflow > 0:
-        points_str = maxi(0, points_str - overflow)
+    var old_str: int = points_str
+    var old_agi: int = points_agi
+    var old_wis: int = points_wis
+    var old_int: int = points_int
+    # Setters учитывают остальные очки: сначала освобождаем весь бюджет,
+    # затем возвращаем распределение с приоритетом STR > AGI > WIS > INT.
+    # Те же setters сохраняют ограничения STR/INT при изменении базы.
+    points_str = 0
+    points_agi = 0
+    points_wis = 0
+    points_int = 0
+    points_str = old_str
+    points_agi = old_agi
+    points_wis = old_wis
+    points_int = old_int
 
 
 func _get_property_list() -> Array[Dictionary]:
