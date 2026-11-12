@@ -1,5 +1,5 @@
 extends Node2D
-## SULEYN v1.4: switchable monster encounters plus universal evasion and concussion scheduling,
+## SULEYN v1.5: two teams, fixed demo queue and switchable legacy duels,
 ## attack animation, HP/MP under units and a scrollable combat journal.
 ## Gameplay mathematics remain in battle_combat.gd and damage_calculator.gd.
 
@@ -14,12 +14,14 @@ const Rules = preload("res://scripts/combat_rules.gd")
 const INVALID_CELL = Vector2i(-1, -1)
 const ALLY_ID = "ally_1"
 const ENEMY_ID = "enemy_1"
+const TEAM_ENCOUNTER: int = 4
+const ENCOUNTER_COUNT: int = 5
 const TEST_FALCON = preload("res://data/monsters/falcon_unit_v14.tres")
 const TEST_HELLHOUND = preload("res://data/monsters/hellhound_unit_v14.tres")
 const TEST_LICH = preload("res://data/monsters/lich_unit_v14.tres")
 const BOARD_ORIGIN = Vector2(106.0, 178.0)
-const LOG_POSITION = Vector2(898.0, 545.0)
-const LOG_SIZE = Vector2(487.0, 268.0)
+const LOG_POSITION = Vector2(898.0, 554.0)
+const LOG_SIZE = Vector2(487.0, 259.0)
 
 const BACKGROUND = Color(0.060, 0.079, 0.112)
 const HEX_DARK = Color(0.15, 0.24, 0.26)
@@ -41,8 +43,8 @@ const MANA_COLOR = Color(0.48, 0.74, 1.0)
 @export_range(20.0, 55.0, 1.0) var hex_radius: float = 35.0
 @export var ally_stats: SuleynUnitStats = preload("res://data/demo_male_lv25.tres")
 @export var enemy_stats: SuleynUnitStats = preload("res://data/demo_female_lv25.tres")
-## 0 = original duel, 1 = falcon, 2 = hellhound, 3 = lich. T cycles.
-var encounter_index: int = 0
+## 0..3 = legacy duels, 4 = team battle. Fixed order is NOT a GDD initiative rule.
+var encounter_index: int = TEAM_ENCOUNTER
 
 func encounter_enemy_stats() -> SuleynUnitStats:
     match encounter_index:
@@ -52,13 +54,15 @@ func encounter_enemy_stats() -> SuleynUnitStats:
     return enemy_stats
 
 func switch_encounter() -> void:
-    encounter_index = (encounter_index + 1) % 4
+    encounter_index = (encounter_index + 1) % ENCOUNTER_COUNT
     reset_demo()
 
 var board
 var turns
 var units: Dictionary = {}
 var selected_unit_id: String = ""
+var inspected_unit_id: String = ""
+var roster_order: Array[String] = []
 var hovered_cell: Vector2i = INVALID_CELL
 var reachable: Dictionary = {}
 var battle_over: bool = false
@@ -120,12 +124,23 @@ func log_event(body: String, tint: String = "#dce5e7") -> void:
 func reset_demo() -> void:
     board = BattleBoard.new(demo_columns, demo_rows)
     var center_row: int = demo_rows / 2
-    board.add_unit(ALLY_ID, Vector2i(1, center_row))
-    board.add_unit(ENEMY_ID, Vector2i(demo_columns - 2, center_row))
     units.clear()
-    units[ALLY_ID] = make_unit(ALLY_ID, "blue", ally_stats)
-    units[ENEMY_ID] = make_unit(ENEMY_ID, "red", encounter_enemy_stats())
-    turns = BattleTurns.new([ALLY_ID, ENEMY_ID])
+    roster_order.clear()
+    if encounter_index == TEAM_ENCOUNTER:
+        # Reuse the v1.4 resources without introducing new balance values.
+        var blue_stats: Array[SuleynUnitStats] = [ally_stats, enemy_stats, TEST_FALCON]
+        var red_stats: Array[SuleynUnitStats] = [TEST_HELLHOUND, TEST_FALCON, TEST_LICH]
+        var row_spacing: int = maxi(1, (demo_rows - 1) / 3)
+        for slot in range(3):
+            var blue_id: String = "ally_%d" % (slot + 1)
+            var red_id: String = "enemy_%d" % (slot + 1)
+            add_combatant(blue_id, "blue", blue_stats[slot], Vector2i(1, center_row + (slot - 1) * row_spacing))
+            add_combatant(red_id, "red", red_stats[slot], Vector2i(demo_columns - 2, center_row + (slot - 1) * row_spacing))
+    else:
+        add_combatant(ALLY_ID, "blue", ally_stats, Vector2i(1, center_row))
+        add_combatant(ENEMY_ID, "red", encounter_enemy_stats(), Vector2i(demo_columns - 2, center_row))
+    turns = BattleTurns.new(roster_order)
+    inspected_unit_id = turns.active_unit_id()
     selected_unit_id = ""
     hovered_cell = INVALID_CELL
     reachable.clear()
@@ -142,30 +157,43 @@ func reset_demo() -> void:
     concussion_notice_text = ""
     animation_attacker = ""
     animation_defender = ""
-    message = "Мужчина начинает. ЛКМ — выбрать, затем зелёный гекс или врага рядом."
+    message = "Ходит %s. Выберите бойца, затем зелёный гекс или противника." % unit_label(turns.active_unit_id())
     if journal != null:
         journal.clear()
-    log_event("═══ НОВЫЙ БОЙ · v1.4 · СЦЕНАРИЙ %d/4 ═══" % (encounter_index + 1), "#ffdc86")
-    log_event("T — сменить противника: женщина / Сокол / Адская гончая / Лич.", "#ffda87")
-    log_event("Мужчина: булава (дробящее), тяжёлая броня, сила 100.")
-    var foe = units[ENEMY_ID]
-    log_event("Противник: %s; материя — %s; PDEF %.0f%%, MDEF %.0f%%." % [
-        unit_label(ENEMY_ID), Matter.matter_name(foe.matter), foe.base_pdef_pct, foe.base_mdef_pct])
-    log_event("Входящий урон мужчины: PDEF против %s = %.0f%%." % [
-        Rules.damage_type_name(foe.melee_damage_type).to_lower(),
-        units[ALLY_ID].physical_defense_pct(foe.melee_damage_type)], "#9cd9fb")
-    log_event("Мужчина против %s (дробящее): PDEF %.0f%%." % [
-        unit_label(ENEMY_ID), foe.physical_defense_pct(Rules.BLUNT)], "#9cd9fb")
-    if foe.is_monster:
-        log_event("ТЕСТОВЫЕ параметры монстра, не утвержденный баланс. Броня отсутствует.", "#ffda87")
-        log_event("Категория монстра: %d; PDEF vs колющее / рубящее / дробящее: %.0f / %.0f / %.0f%%." % [
-            foe.monster_categories, foe.physical_defense_pct(Rules.PIERCING),
-            foe.physical_defense_pct(Rules.SLASHING), foe.physical_defense_pct(Rules.BLUNT)], "#a4def5")
-    else:
-        log_event("Женщина: лёгкая броня, копьё, крит 27,5% ×2, Дальний выпад (2).", "#a4def5")
-    log_event("1 — удар силой 100; 2 — дополнительное умение, если есть; F — магия; R — рестарт.")
-    log_event("Уклонение всех 5–90%; контузия — 2 отдельных пропуска.", "#ffda87")
+    log_event("═══ НОВЫЙ БОЙ · v1.5 · СЦЕНАРИЙ %d/%d ═══" % [encounter_index + 1, ENCOUNTER_COUNT], "#ffdc86")
+    log_event("Две команды, ручное управление обеими. Одно действие: движение, атака или пропуск.")
+    log_event("Фиксированная тестовая очередь; это не окончательное правило инициативы.", "#ffda87")
+    for unit_id in roster_order:
+        var unit = units[unit_id]
+        log_event("%s · %s · %s · HP %d · MP %d." % [unit_label(unit_id),
+            side_label(unit.side), Matter.matter_name(unit.matter), unit.max_hp, unit.max_mp])
+    log_event("Монстры v1.4: тестовые параметры, баланс не утверждён. Броня отсутствует.", "#ffda87")
+    log_event("T — сценарий; R — рестарт; 1 — удар; 2 — умение; F — магия; Space — пропуск.")
+    log_event("Уклонение всех 5–90%; контузия — 2 отдельных пропуска собственных ходов.", "#ffda87")
     queue_redraw()
+
+
+func add_combatant(unit_id: String, side: String, stats: SuleynUnitStats, cell: Vector2i) -> void:
+    if not board.add_unit(unit_id, cell):
+        push_error("Не удалось разместить бойца: %s" % unit_id)
+        return
+    units[unit_id] = make_unit(unit_id, side, stats)
+    roster_order.append(unit_id)
+
+
+func side_label(side: String) -> String:
+    return "Синяя команда" if side == "blue" else "Красная команда"
+
+
+func unit_token(unit_id: String) -> String:
+    return unit_id.replace("ally_", "С").replace("enemy_", "К")
+
+
+func can_perform_action(unit_id: String) -> bool:
+    return (not battle_over and not concussion_skip_pending
+        and animation_time >= ANIMATION_DURATION and units.has(unit_id)
+        and units[unit_id].is_alive() and units[unit_id].concussion_turns_remaining <= 0
+        and turns.can_act(unit_id))
 
 
 func make_unit(unit_id: String, side: String, stats: SuleynUnitStats):
@@ -261,7 +289,12 @@ func _unhandled_input(event: InputEvent) -> void:
             queue_redraw()
     elif event is InputEventMouseButton:
         if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-            click_cell(cell_under_cursor())
+            var point: Vector2 = get_local_mouse_position()
+            if point.x >= 895 and point.x <= 1393 and point.y >= 172 and point.y < 172 + roster_order.size() * 25:
+                inspected_unit_id = roster_order[int((point.y - 172) / 25)]
+                queue_redraw()
+            else:
+                click_cell(cell_under_cursor())
     elif event is InputEventKey:
         if event.pressed and not event.echo:
             if event.keycode == KEY_R:
@@ -275,7 +308,7 @@ func _unhandled_input(event: InputEvent) -> void:
             elif event.keycode == KEY_1:
                 casting_mode = false
                 special_mode = false
-                message = "Режим: ОБЫЧНЫЙ УДАР, сила 100, бесплатно, дистанция 1."
+                message = "Режим: ОБЫЧНЫЙ УДАР, сила из профиля бойца, бесплатно, дистанция 1."
                 log_event("Режим → обычная физическая атака (1).", "#b3d5e5")
                 queue_redraw()
             elif event.keycode == KEY_2:
@@ -309,16 +342,22 @@ func click_cell(cell: Vector2i) -> void:
     if battle_over or concussion_skip_pending or not board.contains(cell) or animation_time < ANIMATION_DURATION:
         return
     var active: String = turns.active_unit_id()
+    if not can_perform_action(active):
+        return
     var clicked_unit: String = board.unit_at(cell)
+    if not clicked_unit.is_empty():
+        inspected_unit_id = clicked_unit
     if clicked_unit == active:
         selected_unit_id = active
         refresh_reachable()
-        message = "%s выбран. 1 — обычный удар; 2 — умение за MP (дальность до 2 у женщины)." % unit_label(active)
+        message = "%s выбран. Зелёный гекс — движение; враг — выбранная атака." % unit_label(active)
     elif not clicked_unit.is_empty():
-        if selected_unit_id != active:
+        if units[clicked_unit].side == units[active].side:
+            message = "%s — союзник. Сейчас ходит %s." % [unit_label(clicked_unit), unit_label(active)]
+        elif selected_unit_id != active:
             message = "Сначала выберите активного героя: %s." % unit_label(active)
         elif not can_target_with_mode(active, clicked_unit):
-            message = "Цель вне дальности! Обычный удар — 1 гекс; умение женщины — до 2."
+            message = "Цель вне дальности или выбранная атака не назначена."
         else:
             attack_enemy(active, clicked_unit)
     elif selected_unit_id == active:
@@ -345,13 +384,20 @@ func click_cell(cell: Vector2i) -> void:
 
 
 func can_target_with_mode(attacker_id: String, defender_id: String) -> bool:
+    if not units.has(attacker_id) or not units.has(defender_id):
+        return false
     if casting_mode:
-        return BattleCombat.can_melee(board, units, attacker_id, defender_id)
+        return units[attacker_id].spell_power > 0 and BattleCombat.can_melee(board, units, attacker_id, defender_id)
+    if special_mode and units[attacker_id].special_skill == null:
+        return false
     var skill: SuleynAttackSkill = units[attacker_id].special_skill if special_mode else null
     return BattleCombat.can_physical(board, units, attacker_id, defender_id, skill)
 
 
-func attack_enemy(attacker_id: String, defender_id: String) -> void:
+func attack_enemy(attacker_id: String, defender_id: String, dodge_roll: float = -1.0,
+        crit_roll: float = -1.0, concussion_roll: float = -1.0) -> void:
+    if not can_perform_action(attacker_id) or not units.has(defender_id):
+        return
     var attack_is_magic: bool = casting_mode
     var attack_is_special: bool = special_mode and not attack_is_magic
     var defender_location: Vector2 = center_of(board.position_of(defender_id))
@@ -362,9 +408,9 @@ func attack_enemy(attacker_id: String, defender_id: String) -> void:
         result = BattleCombat.magic_attack(board, units, attacker_id, defender_id)
     elif attack_is_special:
         result = BattleCombat.skill_attack(board, units, attacker_id, defender_id,
-            units[attacker_id].special_skill)
+            units[attacker_id].special_skill, dodge_roll, crit_roll, concussion_roll)
     else:
-        result = BattleCombat.melee_attack(board, units, attacker_id, defender_id)
+        result = BattleCombat.melee_attack(board, units, attacker_id, defender_id, dodge_roll, crit_roll)
     if not result.get("ok", false):
         message = str(result.get("reason", "Атака невозможна."))
         log_event("%s: %s" % [unit_label(attacker_id), message], "#ffac96")
@@ -390,8 +436,8 @@ func attack_enemy(attacker_id: String, defender_id: String) -> void:
 
     if not attack_is_magic:
         var dodge_pct: float = float(result.get("evasion_percent", defender.evasion_pct))
-        var dodge_roll: float = float(result.get("dodge_roll", -1.0))
-        log_event("  Уклонение: шанс %.1f%%, бросок %.2f." % [dodge_pct, dodge_roll])
+        var logged_dodge_roll: float = float(result.get("dodge_roll", -1.0))
+        log_event("  Уклонение: шанс %.1f%%, бросок %.2f." % [dodge_pct, logged_dodge_roll])
         if result["evaded"]:
             log_event("  [b]УКЛОНЕНИЕ![/b] Урон 0; HP %d/%d." % [defender.hp, defender.max_hp], "#86e9c0")
         else:
@@ -426,8 +472,9 @@ func attack_enemy(attacker_id: String, defender_id: String) -> void:
         if not opponents_alive(attacker.side):
             battle_over = true
             winner_side = attacker.side
-            message = "%s победил! Нажмите R для нового боя." % unit_label(attacker_id)
-            log_event("  [b]ПОБЕДА: %s![/b]" % unit_label(attacker_id), "#ffe080")
+            concussion_skip_pending = false
+            message = "%s победила! R — новый бой; T — другой сценарий." % side_label(winner_side)
+            log_event("  [b]ПОБЕДА: %s![/b]" % side_label(winner_side), "#ffe080")
         else:
             advance_turn(attacker_id)
             message = "%s повержен." % unit_label(defender_id)
@@ -438,16 +485,20 @@ func attack_enemy(attacker_id: String, defender_id: String) -> void:
         message = "%s наносит %d урона %s.%s%s" % [unit_label(attacker_id),
             int(result["damage"]), unit_label(defender_id), crit_notice, stun_notice]
     clear_selection()
+    queue_redraw()
 
 
 func end_active_turn(unit_id: String) -> int:
+    if battle_over or unit_id != turns.active_unit_id() or not units.has(unit_id):
+        return 0
     var regenerated: int = units[unit_id].regenerate_mana_end_turn()
     advance_turn(unit_id)
     return regenerated
 
 
 func advance_turn(previous_id: String) -> void:
-    if turns.next_turn(previous_id):
+    if not battle_over and turns.next_turn(previous_id):
+        inspected_unit_id = turns.active_unit_id()
         prepare_next_concussion_skip()
 
 
@@ -470,7 +521,7 @@ func prepare_next_concussion_skip() -> void:
 
 func resolve_one_concussion_skip() -> void:
     # Called once per stunned character's turn opportunity, never twice for
-    # the same opportunity. The next skip can only occur after the other hero acts.
+    # the same opportunity. Other living units get their turns between skips.
     if not concussion_skip_pending:
         return
     concussion_skip_pending = false
@@ -495,8 +546,7 @@ func resolve_one_concussion_skip() -> void:
         round_before, unit_label(active), skip_number, skip_total,
         unit.concussion_turns_remaining, regen], "#ffda87")
     clear_selection()
-    if turns.next_turn(active):
-        prepare_next_concussion_skip()
+    advance_turn(active)
     queue_redraw()
 
 
@@ -504,7 +554,7 @@ func debug_spend_mana() -> void:
     if battle_over or concussion_skip_pending:
         return
     var active: String = turns.active_unit_id()
-    if active.is_empty():
+    if not can_perform_action(active):
         return
     if units[active].spend_mana(20):
         message = "%s потратил 20 MP. Регенерация произойдёт в конце хода." % unit_label(active)
@@ -527,9 +577,10 @@ func pass_turn() -> void:
     if battle_over or concussion_skip_pending or animation_time < ANIMATION_DURATION:
         return
     var active: String = turns.active_unit_id()
-    if active.is_empty():
+    if not can_perform_action(active):
         return
     var round_before: int = turns.round_number
+    turns.spend_action(active)
     var regen: int = end_active_turn(active)
     clear_selection()
     message = "%s пропустил ход (MP +%d). Теперь ходит %s." % [
@@ -545,13 +596,13 @@ func clear_selection() -> void:
 
 
 func unit_label(unit_id: String) -> String:
-    if unit_id == ALLY_ID:
-        return "Мужчина"
-    if unit_id == ENEMY_ID:
-        if units.has(ENEMY_ID) and units[ENEMY_ID].is_monster:
-            return units[ENEMY_ID].display_name
-        return "Женщина"
-    return unit_id
+    if not units.has(unit_id):
+        return unit_id
+    var unit = units[unit_id]
+    var name: String = unit.display_name
+    if not unit.is_monster:
+        name = "Мужчина" if unit.melee_damage_type == Rules.BLUNT else "Женщина"
+    return "%s · %s" % [unit_token(unit_id), name] if encounter_index == TEAM_ENCOUNTER else name
 
 
 func refresh_reachable() -> void:
@@ -565,8 +616,9 @@ func _draw() -> void:
     draw_rect(Rect2(Vector2.ZERO, Vector2(1440, 900)), BACKGROUND)
     draw_rect(Rect2(Vector2(28, 98), Vector2(823, 679)), Color(0.10, 0.14, 0.18), true)
     draw_rect(Rect2(Vector2(879, 98), Vector2(530, 735)), Color(0.12, 0.18, 0.23), true)
-    draw_text(Vector2(35, 47), "СУЛЭЙН  /  ПЕРВЫЕ МОНСТРЫ И МАТЕРИИ", 27, WHITE)
-    draw_text(Vector2(36, 78), "v1.4 · T — СМЕНА ПРОТИВНИКА · УДАР 100 · КОНТУЗИЯ/МАТЕРИЯ", 16, MUTED)
+    draw_text(Vector2(35, 47), "СУЛЭЙН  /  КОМАНДНЫЙ БОЙ", 27, WHITE)
+    var encounter_caption: String = "3 НА 3" if encounter_index == TEAM_ENCOUNTER else "ДУЭЛЬ"
+    draw_text(Vector2(36, 78), "v1.5 · %s · ФИКСИРОВАННАЯ ОЧЕРЕДЬ · T — СЦЕНАРИЙ %d/5" % [encounter_caption, encounter_index + 1], 16, MUTED)
 
     for r in range(board.rows):
         for q in range(board.columns):
@@ -586,8 +638,8 @@ func _draw() -> void:
             draw_polyline(outline, HEX_EDGE, 1.4, true)
 
     draw_hover_path()
-    draw_unit(ALLY_ID, ALLY)
-    draw_unit(ENEMY_ID, ENEMY)
+    for unit_id in roster_order:
+        draw_unit(unit_id, ALLY if units[unit_id].side == "blue" else ENEMY)
     draw_damage_popup()
     draw_concussion_turn_notice()
     draw_sidebar()
@@ -618,6 +670,9 @@ func draw_unit(unit_id: String, fill: Color) -> void:
         if can_target_with_mode(selected_unit_id, unit_id):
             draw_arc(center, hex_radius * 1.06, 0.0, TAU, 48, ATTACK_COLOR, 3.0, true)
 
+    draw_arc(center, hex_radius * 0.78, 0.0, TAU, 48, fill, 3.0, true)
+    if encounter_index == TEAM_ENCOUNTER:
+        draw_text(center + Vector2(-9, -39), unit_token(unit_id), 12, fill.lightened(0.3))
     var phase: float = animation_time / ANIMATION_DURATION
     var lunge: float = 0.0
     var shake: float = 0.0
@@ -632,7 +687,7 @@ func draw_unit(unit_id: String, fill: Color) -> void:
     if units[unit_id].is_monster:
         draw_monster_figurine(animated_center, units[unit_id].monster_categories, units[unit_id].matter)
     else:
-        draw_hero_figurine(animated_center, unit_id == ALLY_ID, fill)
+        draw_hero_figurine(animated_center, units[unit_id].melee_damage_type == Rules.BLUNT, fill)
     draw_vitals(center, units[unit_id])
     if units[unit_id].concussion_turns_remaining > 0:
         draw_concussion_stars(animated_center, units[unit_id].concussion_turns_remaining)
@@ -775,19 +830,38 @@ func draw_damage_popup() -> void:
 
 func draw_sidebar() -> void:
     var active: String = turns.active_unit_id()
-    draw_text(Vector2(899, 134), "РАУНД %d" % turns.round_number, 20, PATH_COLOR)
+    draw_text(Vector2(899, 126), "РАУНД %d" % turns.round_number, 18, PATH_COLOR)
     if battle_over:
-        draw_text(Vector2(1110, 134), "ПОБЕДА: %s" % unit_label(ALLY_ID if winner_side == "blue" else ENEMY_ID), 16, PATH_COLOR)
+        draw_text(Vector2(1050, 126), "ПОБЕДА: %s" % side_label(winner_side), 16, PATH_COLOR)
     else:
         var turn_caption: String = "ПРОПУСК: %s" if concussion_skip_pending else "ХОДИТ: %s"
-        draw_text(Vector2(1110, 134), turn_caption % unit_label(active), 16, PATH_COLOR if concussion_skip_pending else WHITE)
-    draw_text(Vector2(900, 158), "БОЙЦЫ / ПАРАМЕТРЫ УДАРА", 15, MUTED)
-    draw_commander_row(ALLY_ID, ALLY, 193)
-    draw_commander_row(ENEMY_ID, ENEMY, 356)
-    draw_rect(Rect2(Vector2(893, 520), Vector2(503, 305)), Color(0.055, 0.090, 0.13), true)
+        draw_text(Vector2(1050, 126), turn_caption % unit_label(active), 16, PATH_COLOR if concussion_skip_pending else WHITE)
+    var queue_tokens: PackedStringArray = []
+    for offset in range(turns.turn_order.size()):
+        var index: int = (turns.turn_index + offset) % turns.turn_order.size()
+        queue_tokens.append(unit_token(turns.turn_order[index]))
+    var queue_caption: String = "БОЙ ЗАВЕРШЁН" if battle_over else "ОЧЕРЕДЬ: " + " → ".join(queue_tokens)
+    draw_text(Vector2(900, 154), queue_caption, 15, MUTED)
+    for slot in range(roster_order.size()):
+        var unit_id: String = roster_order[slot]
+        var unit = units[unit_id]
+        var y: float = 190.0 + slot * 25.0
+        var fill: Color = ALLY if unit.side == "blue" else ENEMY
+        if inspected_unit_id == unit_id:
+            draw_rect(Rect2(Vector2(895, y - 18), Vector2(498, 25)), Color(0.19, 0.26, 0.32))
+        draw_circle(Vector2(907, y - 5), 5.0, fill if unit.is_alive() else MUTED)
+        var state: String = "ПОВЕРЖЕН" if not unit.is_alive() else ("КОНТ. %d" % unit.concussion_turns_remaining if unit.concussion_turns_remaining > 0 else "")
+        var marker: String = "» " if unit_id == active and not battle_over else ""
+        draw_text(Vector2(920, y), marker + unit_label(unit_id), 14, WHITE if unit.is_alive() else MUTED)
+        draw_text(Vector2(1130, y), "HP %d  MP %d  %s" % [unit.hp, unit.mp, state], 13, fill.lightened(0.3))
+    draw_text(Vector2(900, 341), "ПАРАМЕТРЫ · клик по бойцу или строке списка", 13, MUTED)
+    var detail_id: String = inspected_unit_id if units.has(inspected_unit_id) else active
+    if units.has(detail_id):
+        draw_commander_row(detail_id, ALLY if units[detail_id].side == "blue" else ENEMY, 371)
+    draw_rect(Rect2(Vector2(893, 531), Vector2(503, 294)), Color(0.055, 0.090, 0.13), true)
     var mode: String = "МАГИЯ" if casting_mode else ("УМЕНИЕ (2)" if special_mode else "ОБЫЧНЫЙ (1)")
-    draw_text(Vector2(901, 498), "ВЫБРАН РЕЖИМ: %s" % mode, 16, PATH_COLOR)
-    draw_text(Vector2(903, 537), "ЖУРНАЛ БОЯ  /  MP, КРИТЫ, КОНТУЗИЯ", 15, PATH_COLOR)
+    draw_text(Vector2(901, 513), "РЕЖИМ: %s · обе команды вручную" % mode, 14, PATH_COLOR)
+    draw_text(Vector2(903, 548), "ЖУРНАЛ БОЯ  /  MP, КРИТЫ, КОНТУЗИЯ", 15, PATH_COLOR)
 
 
 func draw_commander_row(unit_id: String, fill: Color, y: float) -> void:
@@ -807,7 +881,7 @@ func draw_commander_row(unit_id: String, fill: Color, y: float) -> void:
         int(a.get("STR", 0)), int(a.get("AGI", 0)), int(a.get("WIS", 0)), int(a.get("INT", 0))], 15, WHITE)
     draw_text(Vector2(902, y + 83), "Физ. бонус +%.0f%%   Уклонение %.1f%%   Крит %.1f%%" % [
         u.physical_damage_bonus_pct, u.final_evasion_pct(), u.crit_chance_pct], 14, PATH_COLOR)
-    var incoming_type: int = Rules.PIERCING if unit_id == ALLY_ID else Rules.BLUNT
+    var incoming_type: int = units[turns.active_unit_id()].melee_damage_type if not turns.active_unit_id().is_empty() else Rules.BLUNT
     draw_text(Vector2(902, y + 104), "PDEF против %s: %.0f%%  |  MDEF: %.0f%%  |  КРИТ ×%.1f" % [
         Rules.damage_type_name(incoming_type).to_lower(),
         u.physical_defense_pct(incoming_type), u.magic_defense_pct(), u.critical_multiplier], 13, WHITE)
@@ -837,8 +911,8 @@ func draw_monster_row(unit_id: String, fill: Color, y: float) -> void:
 
 
 func draw_instructions() -> void:
-    draw_text(Vector2(40, 810), "ЛКМ: герой → зелёный гекс (движение) / противник (удар)", 17, WHITE)
-    draw_text(Vector2(40, 839), "1 — удар 100    2 — умение    F — магия    Space — пропуск    R — сброс    T — монстр", 15, MUTED)
+    draw_text(Vector2(40, 810), "ЛКМ: активный боец → зелёный гекс / враг. Одно действие за ход.", 17, WHITE)
+    draw_text(Vector2(40, 839), "1 — удар    2 — умение    F — магия    Space — пропуск    R — сброс    T — сценарий", 15, MUTED)
     draw_text(Vector2(40, 872), message, 16, PATH_COLOR)
 
 

@@ -9,7 +9,11 @@ var action_spent: bool = false
 
 
 func _init(unit_ids: Array[String]) -> void:
-    turn_order = unit_ids.duplicate()
+    # A runtime unit has exactly one slot; empty IDs never represent a turn.
+    # Keep first occurrence order rather than guessing initiative from stats.
+    for unit_id in unit_ids:
+        if not unit_id.is_empty() and not turn_order.has(unit_id):
+            turn_order.append(unit_id)
 
 
 func active_unit_id() -> String:

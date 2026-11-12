@@ -33,6 +33,7 @@ func make_duel(distance: int = 1) -> Dictionary:
     var demo = Demo.new()
     var man = demo.make_unit("man", "blue", MaleStats)
     var woman = demo.make_unit("woman", "red", FemaleStats)
+    demo.free()
     var board = Board.new(7, 5)
     board.add_unit("man", Vector2i(1, 2))
     board.add_unit("woman", Vector2i(1 + distance, 2))
@@ -113,6 +114,7 @@ func run_checks() -> void:
     check(ranged["man"].hp == hp_before, "insufficient mana does not deal damage")
 
     var skip_demo = Demo.new()
+    skip_demo.encounter_index = 0  # This regression specifically tests the legacy duel.
     skip_demo.reset_demo()
     var target = skip_demo.units[Demo.ENEMY_ID]
     target.apply_concussion(2)
@@ -150,3 +152,4 @@ func run_checks() -> void:
     check(not skip_demo.concussion_skip_pending and
         skip_demo.turns.active_unit_id() == Demo.ENEMY_ID,
         "woman can act normally on her third turn opportunity")
+    skip_demo.free()
