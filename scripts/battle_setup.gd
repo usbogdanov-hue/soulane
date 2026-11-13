@@ -2,6 +2,8 @@ extends RefCounted
 ## Data-only draft for the three-versus-three preparation screen.
 ## Deployment rules belong to preparation, not combat movement or initiative.
 
+const Arena = preload("res://scripts/battle_arena.gd")
+
 const PROFILE_KEYS: Array[String] = ["male", "female", "falcon", "hellhound", "lich"]
 const UNIT_IDS: Array[String] = ["ally_1", "enemy_1", "ally_2", "enemy_2", "ally_3", "enemy_3"]
 const CATALOG: Dictionary = {
@@ -17,6 +19,7 @@ var rows: int
 var profile_keys: Dictionary = {}
 var positions: Dictionary = {}
 var enemy_ai_enabled: bool = true
+var arena_key: String = "open"
 
 
 func _init(width: int = 9, height: int = 7) -> void:
@@ -82,9 +85,36 @@ func cell_is_deployment(side: String, cell: Vector2i) -> bool:
     return false
 
 
+func arena_label() -> String:
+    return Arena.label(arena_key)
+
+
+func arena_description() -> String:
+    return Arena.description(arena_key)
+
+
+func blocked_cells() -> Array[Vector2i]:
+    return Arena.blocked_cells(arena_key, columns, rows)
+
+
+func is_blocked(cell: Vector2i) -> bool:
+    return blocked_cells().has(cell)
+
+
+func can_deploy(side: String, cell: Vector2i) -> bool:
+    return Arena.is_supported(arena_key, columns, rows) and cell_is_deployment(side, cell) and not is_blocked(cell)
+
+
+func set_arena(key: String) -> bool:
+    if not Arena.is_supported(key, columns, rows):
+        return false
+    arena_key = key
+    return true
+
+
 func place_unit(unit_id: String, cell: Vector2i) -> bool:
     var side: String = team_for(unit_id)
-    if side.is_empty() or not cell_is_deployment(side, cell):
+    if side.is_empty() or not can_deploy(side, cell):
         return false
     # The chosen slot must exist before a placement can edit it.
     if not positions.has(unit_id):
@@ -108,6 +138,7 @@ func reset_positions() -> void:
 
 
 func reset_defaults() -> void:
+    arena_key = "open"
     profile_keys = {
         "ally_1": "male", "enemy_1": "hellhound",
         "ally_2": "female", "enemy_2": "falcon",
@@ -121,6 +152,8 @@ func validation_errors() -> PackedStringArray:
     var errors: PackedStringArray = []
     if columns < 4 or rows < 3:
         errors.append("Поле подготовки должно быть не меньше 4×3.")
+    if not Arena.is_supported(arena_key, columns, rows):
+        errors.append("Выберите доступную арену: арены с препятствиями требуют поле не меньше 7×5.")
     if profile_keys.size() != UNIT_IDS.size():
         errors.append("В составе должны быть ровно три бойца каждой команды.")
     if positions.size() != UNIT_IDS.size():
@@ -139,6 +172,8 @@ func validation_errors() -> PackedStringArray:
             errors.append("Для %s нужен корректный стартовый гекс." % unit_id)
             continue
         var cell: Vector2i = positions[unit_id]
+        if is_blocked(cell):
+            errors.append("Боец %s размещён на препятствии." % unit_id)
         if not cell_is_deployment(team_for(unit_id), cell):
             errors.append("Боец %s находится вне зоны своей команды." % unit_id)
         if occupied.has(cell):
@@ -160,4 +195,5 @@ func copy():
     draft.profile_keys = profile_keys.duplicate(true)
     draft.positions = positions.duplicate(true)
     draft.enemy_ai_enabled = enemy_ai_enabled
+    draft.arena_key = arena_key
     return draft
