@@ -1,5 +1,5 @@
 extends Node2D
-## SULEYN v1.7: roster selection and deployment before battle; red AI with a manual toggle, two teams, fixed demo queue and switchable legacy duels,
+## SULEYN v1.8: attack previews, target explanations, statuses and battle results.
 ## attack animation, HP/MP under units and a scrollable combat journal.
 ## Gameplay mathematics remain in battle_combat.gd and damage_calculator.gd.
 
@@ -11,6 +11,9 @@ const BattleCombat = preload("res://scripts/battle_combat.gd")
 const BattleAI = preload("res://scripts/battle_ai.gd")
 const BattleSetup = preload("res://scripts/battle_setup.gd")
 const PreparationUI = preload("res://scripts/battle_preparation_ui.gd")
+const AttackPreview = preload("res://scripts/attack_preview.gd")
+const FeedbackUI = preload("res://scripts/battle_feedback_ui.gd")
+const ResultsUI = preload("res://scripts/battle_results_ui.gd")
 const Matter = preload("res://scripts/matter_rules.gd")
 const Rules = preload("res://scripts/combat_rules.gd")
 
@@ -68,6 +71,10 @@ var preparing: bool = false
 var team_setup = null
 var preparation_ui = null
 var new_battle_button: Button
+var feedback_ui = null
+var results_ui = null
+var results_button: Button
+var results_pending: bool = false
 
 var board
 var turns
@@ -111,6 +118,7 @@ var animation_stunned: bool = false
 func _ready() -> void:
     create_journal()
     create_new_battle_button()
+    create_battle_feedback()
     reset_demo()
     if start_in_preparation:
         open_preparation()
@@ -129,6 +137,13 @@ func open_preparation() -> void:
     if preparing:
         return
     preparing = true
+    results_pending = false
+    if is_instance_valid(feedback_ui):
+        feedback_ui.hide()
+    if is_instance_valid(results_ui):
+        results_ui.hide()
+    if results_button != null:
+        results_button.hide()
     reset_ai_wait()
     clear_selection()
     if journal != null:
@@ -205,6 +220,163 @@ func start_prepared_battle() -> bool:
     return true
 
 
+func create_battle_feedback() -> void:
+    feedback_ui = FeedbackUI.new()
+    feedback_ui.mode_requested.connect(set_attack_mode)
+    add_child(feedback_ui)
+    results_button = Button.new()
+    results_button.text = "Итоги боя"
+    results_button.position = Vector2(965, 34)
+    results_button.size = Vector2(210, 38)
+    results_button.pressed.connect(show_battle_results)
+    results_button.hide()
+    add_child(results_button)
+
+
+func current_attack_mode() -> String:
+    return "magic" if casting_mode else ("special" if special_mode else "basic")
+
+
+func set_attack_mode(mode: String) -> void:
+    if preparing or battle_over or is_ai_turn() or not ["basic", "special", "magic"].has(mode):
+        return
+    casting_mode = mode == "magic"
+    special_mode = mode == "special"
+    message = "Режим: %s. Наведите на врага для предпросмотра." % attack_mode_name()
+    log_event(message, "#b3d5e5")
+    refresh_feedback()
+    queue_redraw()
+
+
+func attack_mode_name() -> String:
+    if turns == null or not units.has(turns.active_unit_id()):
+        return "атака"
+    var actor = units[turns.active_unit_id()]
+    if casting_mode:
+        return "Магия"
+    if special_mode:
+        return actor.special_skill.display_name if actor.special_skill != null else "Умение не назначено"
+    return "Обычный удар"
+
+
+func attack_preview_for(target_id: String) -> Dictionary:
+    var active: String = turns.active_unit_id() if turns != null else ""
+    var preview: Dictionary = AttackPreview.evaluate(board, units, active, target_id, current_attack_mode())
+    var blocked: String = ""
+    if preparing:
+        blocked = "Сначала завершите подготовку боя."
+    elif battle_over:
+        blocked = "Бой завершён."
+    elif is_ai_turn():
+        blocked = "Сейчас ходит ИИ. A — перейти к ручному управлению."
+    elif concussion_skip_pending or (units.has(active) and units[active].concussion_turns_remaining > 0):
+        blocked = "Контузия: дождитесь пропуска собственного хода."
+    elif animation_time < ANIMATION_DURATION:
+        blocked = "Дождитесь окончания анимации."
+    elif selected_unit_id != active:
+        blocked = "Сначала выберите активного бойца на поле."
+    elif turns != null and not turns.can_act(active):
+        blocked = "Действие этого хода уже потрачено."
+    if not blocked.is_empty():
+        preview.available = false
+        preview.reason = blocked
+    return preview
+
+
+func unit_status(unit_id: String) -> String:
+    if not units.has(unit_id):
+        return ""
+    var unit = units[unit_id]
+    if not unit.is_alive():
+        return "Повержен"
+    if unit.concussion_turns_remaining > 0:
+        return "Контузия: осталось %d собственных пропуска" % unit.concussion_turns_remaining
+    if battle_over:
+        return "Выжил"
+    return "Ходит сейчас" if turns != null and turns.active_unit_id() == unit_id else "Ожидает своего хода"
+
+
+func feedback_text() -> String:
+    if turns == null or not units.has(turns.active_unit_id()):
+        return ""
+    var active: String = turns.active_unit_id()
+    var actor = units[active]
+    var target_id: String = board.unit_at(hovered_cell)
+    if target_id.is_empty() or not units.has(target_id) or units[target_id].side == actor.side:
+        var hint: String = "Выберите активного бойца, затем наведите на врага."
+        if is_ai_turn():
+            hint = "Ход красных выполняет ИИ; A — ручное управление."
+        elif battle_over:
+            hint = "Бой завершён. Откройте итоги или начните новый бой."
+        elif actor.concussion_turns_remaining > 0:
+            hint = unit_status(active) + "."
+        var cost: int = actor.spell_mana_cost if casting_mode else (actor.special_skill.mana_cost if special_mode and actor.special_skill != null else 0)
+        var minimum: int = maxi(1, actor.special_skill.min_range) if special_mode and actor.special_skill != null else 1
+        var maximum: int = maxi(minimum, actor.special_skill.max_range) if special_mode and actor.special_skill != null else 1
+        var ability_hint: String = "Дальность %d–%d гекс. · Расход %d MP · В запасе %d MP" % [minimum, maximum, cost, actor.mp]
+        if casting_mode and actor.spell_power <= 0:
+            ability_hint = "У этого бойца нет атакующего заклинания."
+        elif special_mode and actor.special_skill == null:
+            ability_hint = "У этого бойца нет дополнительного умения."
+        return "[b]%s · %s[/b]\n%s\n%s\nОранжевое кольцо — доступная цель. Серое — атака недоступна.\nЗелёный гекс — движение. Движение расходует действие.\n%s: %s" % [unit_label(active), attack_mode_name(), hint, ability_hint, unit_label(inspected_unit_id), unit_status(inspected_unit_id)]
+    var p: Dictionary = attack_preview_for(target_id)
+    var status: String = "Доступно: ЛКМ по цели выполнит атаку." if p.available else "Недоступно: " + str(p.reason)
+    if str(p.name) == "Атака":
+        return "[b]Цель: %s[/b]\n%s" % [unit_label(target_id), status]
+    var critical: String = " · Крит %d HP (%.1f%% при попадании)" % [p.critical_damage, p.crit_chance_pct] if p.crit_chance_pct > 0.0 else " · Без критов"
+    var text: String = "[b]%s → %s[/b]\n%s\nУрон при попадании: %d HP%s\nПопадание %.1f%% · В среднем %.1f HP за попытку\nРасход %d MP · Дистанция %d / %d–%d · Защита цели %.1f%%" % [p.name, unit_label(target_id), status, p.normal_damage, critical, p.hit_chance_pct, p.expected_damage, p.cost, p.distance, p.min_range, p.max_range, p.defense_pct]
+    if p.concussion_chance_pct > 0.0:
+        text += "\nКонтузия %.0f%% после несмертельного попадания · %d своих пропуска" % [p.concussion_chance_pct, p.concussion_turns]
+    else:
+        text += "\nМатерии: %s → %s · Атака −%.0f%% · Защита −%.0f п.п." % [Matter.matter_name(p.attack_matter), Matter.matter_name(p.defender_matter), p.matter_attack_penalty_pct, p.matter_defense_penalty_pp]
+    return text
+
+
+func refresh_feedback() -> void:
+    if not is_instance_valid(feedback_ui) or preparing:
+        return
+    feedback_ui.present(feedback_text(), current_attack_mode(), not battle_over and not is_ai_turn())
+
+
+func battle_summary() -> Dictionary:
+    var teams: Dictionary = {"blue": {"total": 0, "alive": 0, "fallen": 0}, "red": {"total": 0, "alive": 0, "fallen": 0}}
+    var rows: Array[Dictionary] = []
+    for unit_id in roster_order:
+        var unit = units[unit_id]
+        teams[unit.side].total += 1
+        teams[unit.side]["alive" if unit.is_alive() else "fallen"] += 1
+        rows.append({"label": unit_label(unit_id), "side": unit.side, "alive": unit.is_alive(), "hp": unit.hp, "max_hp": unit.max_hp})
+    return {"winner_side": winner_side, "rounds": turns.round_number, "teams": teams, "units": rows}
+
+
+func show_battle_results() -> void:
+    if preparing or not battle_over or animation_time < ANIMATION_DURATION:
+        return
+    if not is_instance_valid(results_ui):
+        results_ui = ResultsUI.new()
+        results_ui.repeat_requested.connect(reset_demo)
+        results_ui.preparation_requested.connect(open_preparation)
+        results_ui.review_requested.connect(review_battle)
+        results_ui.z_index = 50
+        add_child(results_ui)
+    results_ui.configure(battle_summary())
+    results_ui.show()
+    results_pending = false
+    if is_instance_valid(feedback_ui):
+        feedback_ui.hide()
+    if results_button != null:
+        results_button.show()
+
+
+func review_battle() -> void:
+    if is_instance_valid(results_ui):
+        results_ui.hide()
+    if is_instance_valid(feedback_ui):
+        feedback_ui.show()
+    refresh_feedback()
+    queue_redraw()
+
+
 func create_journal() -> void:
     journal = RichTextLabel.new()
     journal.name = "BattleLog"
@@ -229,6 +401,13 @@ func log_event(body: String, tint: String = "#dce5e7") -> void:
 
 
 func reset_demo() -> void:
+    results_pending = false
+    if is_instance_valid(results_ui):
+        results_ui.hide()
+    if results_button != null:
+        results_button.hide()
+    if is_instance_valid(feedback_ui) and not preparing:
+        feedback_ui.show()
     board = BattleBoard.new(demo_columns, demo_rows)
     var center_row: int = demo_rows / 2
     units.clear()
@@ -270,7 +449,7 @@ func reset_demo() -> void:
     message = "Ходит %s. Выберите бойца, затем зелёный гекс или противника." % unit_label(turns.active_unit_id())
     if journal != null:
         journal.clear()
-    log_event("═══ НОВЫЙ БОЙ · v1.7 · СЦЕНАРИЙ %d/%d ═══" % [encounter_index + 1, ENCOUNTER_COUNT], "#ffdc86")
+    log_event("═══ НОВЫЙ БОЙ · v1.8 · СЦЕНАРИЙ %d/%d ═══" % [encounter_index + 1, ENCOUNTER_COUNT], "#ffdc86")
     log_event("Управление: %s. Одно действие: движение, атака или пропуск." % control_description())
     if encounter_index == TEAM_ENCOUNTER:
         log_event("A — переключить ИИ красной команды и ручное управление.", "#ffda87")
@@ -497,6 +676,9 @@ func _process(delta: float) -> void:
     # A newly available AI turn starts its own pause on the following frame.
     if not animation_was_playing and not concussion_was_pending:
         update_ai(delta)
+    if battle_over and results_pending and animation_time >= ANIMATION_DURATION:
+        show_battle_results()
+    refresh_feedback()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -506,6 +688,15 @@ func _unhandled_input(event: InputEvent) -> void:
             queue_redraw()
         elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
             preparation_ui.handle_board_click(cell_under_cursor())
+        return
+    if is_instance_valid(results_ui) and results_ui.visible:
+        if event is InputEventKey and event.pressed and not event.echo:
+            if event.keycode == KEY_R:
+                reset_demo()
+            elif event.keycode == KEY_P:
+                open_preparation()
+            elif event.keycode == KEY_T:
+                switch_encounter()
         return
     if event is InputEventMouseMotion:
         var new_hover: Vector2i = cell_under_cursor()
@@ -535,25 +726,11 @@ func _unhandled_input(event: InputEvent) -> void:
             elif event.keycode == KEY_M:
                 debug_spend_mana()
             elif event.keycode == KEY_1 and not is_ai_turn():
-                casting_mode = false
-                special_mode = false
-                message = "Режим: ОБЫЧНЫЙ УДАР, сила из профиля бойца, бесплатно, дистанция 1."
-                log_event("Режим → обычная физическая атака (1).", "#b3d5e5")
-                queue_redraw()
+                set_attack_mode("basic")
             elif event.keycode == KEY_2 and not is_ai_turn():
-                casting_mode = false
-                special_mode = true
-                message = "Режим: ДОПОЛНИТЕЛЬНОЕ УМЕНИЕ (2). Дальность зависит от героя."
-                log_event("Режим → дополнительное физическое умение (2).", "#b3d5e5")
-                queue_redraw()
+                set_attack_mode("special")
             elif event.keycode == KEY_F and not is_ai_turn():
-                casting_mode = not casting_mode
-                if casting_mode:
-                    special_mode = false
-                var mode: String = "МАГИЯ" if casting_mode else "ОБЫЧНЫЙ УДАР"
-                message = "Режим: %s." % mode
-                log_event("Режим атаки → %s." % mode, "#b3d5e5")
-                queue_redraw()
+                set_attack_mode("basic" if casting_mode else "magic")
 
 
 func cell_under_cursor() -> Vector2i:
@@ -589,7 +766,7 @@ func click_cell(cell: Vector2i, ai_action: bool = false) -> void:
         elif selected_unit_id != active:
             message = "Сначала выберите активного героя: %s." % unit_label(active)
         elif not can_target_with_mode(active, clicked_unit):
-            message = "Цель вне дальности или выбранная атака не назначена."
+            message = str(attack_preview_for(clicked_unit).reason)
         else:
             attack_enemy(active, clicked_unit, -1.0, -1.0, -1.0, ai_action)
     elif selected_unit_id == active:
@@ -604,14 +781,7 @@ func click_cell(cell: Vector2i, ai_action: bool = false) -> void:
 
 
 func can_target_with_mode(attacker_id: String, defender_id: String) -> bool:
-    if not units.has(attacker_id) or not units.has(defender_id):
-        return false
-    if casting_mode:
-        return units[attacker_id].spell_power > 0 and BattleCombat.can_melee(board, units, attacker_id, defender_id)
-    if special_mode and units[attacker_id].special_skill == null:
-        return false
-    var skill: SuleynAttackSkill = units[attacker_id].special_skill if special_mode else null
-    return BattleCombat.can_physical(board, units, attacker_id, defender_id, skill)
+    return bool(AttackPreview.evaluate(board, units, attacker_id, defender_id, current_attack_mode()).available)
 
 
 func attack_enemy(attacker_id: String, defender_id: String, dodge_roll: float = -1.0,
@@ -692,8 +862,9 @@ func attack_enemy(attacker_id: String, defender_id: String, dodge_roll: float = 
         if not opponents_alive(attacker.side):
             battle_over = true
             winner_side = attacker.side
+            results_pending = true
             concussion_skip_pending = false
-            message = "%s победила! R — новый бой; T — другой сценарий." % side_label(winner_side)
+            message = "%s победила! R — повтор; P — изменить составы." % side_label(winner_side)
             log_event("  [b]ПОБЕДА: %s![/b]" % side_label(winner_side), "#ffe080")
         else:
             advance_turn(attacker_id)
@@ -841,7 +1012,7 @@ func _draw() -> void:
     draw_rect(Rect2(Vector2(879, 98), Vector2(530, 735)), Color(0.12, 0.18, 0.23), true)
     draw_text(Vector2(35, 47), "СУЛЭЙН  /  РАССТАНОВКА" if preparing else "СУЛЭЙН  /  КОМАНДНЫЙ БОЙ", 27, WHITE)
     var encounter_caption: String = "3 НА 3" if encounter_index == TEAM_ENCOUNTER else "ДУЭЛЬ"
-    var heading: String = "v1.7 · СИНИЕ — ДВА ЛЕВЫХ СТОЛБЦА · КРАСНЫЕ — ДВА ПРАВЫХ" if preparing else "v1.7 · %s · ФИКСИРОВАННАЯ ОЧЕРЕДЬ · T — СЦЕНАРИЙ %d/5" % [encounter_caption, encounter_index + 1]
+    var heading: String = "v1.8 · СИНИЕ — ДВА ЛЕВЫХ СТОЛБЦА · КРАСНЫЕ — ДВА ПРАВЫХ" if preparing else "v1.8 · %s · ФИКСИРОВАННАЯ ОЧЕРЕДЬ · T — СЦЕНАРИЙ %d/5" % [encounter_caption, encounter_index + 1]
     draw_text(Vector2(36, 78), heading, 16, MUTED)
 
     for r in range(board.rows):
@@ -903,9 +1074,10 @@ func draw_unit(unit_id: String, fill: Color) -> void:
         draw_arc(center, hex_radius * 0.88, 0.0, TAU, 48, PATH_COLOR, 3.0, true)
     if not preparing and not battle_over and turns.active_unit_id() == unit_id:
         draw_arc(center, hex_radius * 0.98, 0.0, TAU, 48, PATH_COLOR, 2.0, true)
-    if not preparing and selected_unit_id != "" and selected_unit_id != unit_id:
-        if can_target_with_mode(selected_unit_id, unit_id):
-            draw_arc(center, hex_radius * 1.06, 0.0, TAU, 48, ATTACK_COLOR, 3.0, true)
+    if not preparing and not battle_over and selected_unit_id == turns.active_unit_id() and selected_unit_id != unit_id:
+        if units[selected_unit_id].side != units[unit_id].side:
+            var target_preview: Dictionary = attack_preview_for(unit_id)
+            draw_arc(center, hex_radius * 1.06, 0.0, TAU, 48, ATTACK_COLOR if target_preview.available else MUTED.darkened(0.25), 3.0 if target_preview.available else 1.0, true)
 
     draw_arc(center, hex_radius * 0.78, 0.0, TAU, 48, fill, 3.0, true)
     if encounter_index == TEAM_ENCOUNTER:
@@ -1098,7 +1270,8 @@ func draw_sidebar() -> void:
     draw_rect(Rect2(Vector2(893, 531), Vector2(503, 294)), Color(0.055, 0.090, 0.13), true)
     var mode: String = "МАГИЯ" if casting_mode else ("УМЕНИЕ (2)" if special_mode else "ОБЫЧНЫЙ (1)")
     var controller: String = "красные: ИИ (A)" if encounter_index == TEAM_ENCOUNTER and enemy_ai_enabled else ("ручной бой (A)" if encounter_index == TEAM_ENCOUNTER else "ручной бой")
-    draw_text(Vector2(901, 513), "%s · %s" % [mode, controller], 14, PATH_COLOR)
+    var detail_status: String = unit_status(detail_id)
+    draw_text(Vector2(901, 513), detail_status if units.has(detail_id) and units[detail_id].concussion_turns_remaining > 0 else "%s · %s" % [mode, controller], 14, PATH_COLOR)
     draw_text(Vector2(903, 548), "ЖУРНАЛ БОЯ  /  MP, КРИТЫ, КОНТУЗИЯ", 15, PATH_COLOR)
 
 
@@ -1149,7 +1322,7 @@ func draw_monster_row(unit_id: String, fill: Color, y: float) -> void:
 
 
 func draw_instructions() -> void:
-    draw_text(Vector2(40, 810), "ЛКМ: активный боец → зелёный гекс / враг. Одно действие за ход.", 17, WHITE)
+    draw_text(Vector2(40, 810), "ЛКМ: активный боец → зелёный гекс / оранжевая цель. Одно действие.", 16, WHITE)
     var ai_hint: String = "   A — ИИ" if encounter_index == TEAM_ENCOUNTER else ""
     draw_text(Vector2(40, 839), "1 — удар   2 — умение   F — магия   Space — пропуск   R — сброс   T — сценарий" + ai_hint, 15, MUTED)
     draw_text(Vector2(40, 872), message, 16, PATH_COLOR)
