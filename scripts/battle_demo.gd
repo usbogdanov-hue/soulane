@@ -1,5 +1,5 @@
 extends Node2D
-## SULEYN v1.5: two teams, fixed demo queue and switchable legacy duels,
+## SULEYN v1.6: red AI with a manual toggle, two teams, fixed demo queue and switchable legacy duels,
 ## attack animation, HP/MP under units and a scrollable combat journal.
 ## Gameplay mathematics remain in battle_combat.gd and damage_calculator.gd.
 
@@ -8,6 +8,7 @@ const BattleBoard = preload("res://scripts/battle_board.gd")
 const BattleTurns = preload("res://scripts/battle_turns.gd")
 const BattleUnit = preload("res://scripts/battle_unit.gd")
 const BattleCombat = preload("res://scripts/battle_combat.gd")
+const BattleAI = preload("res://scripts/battle_ai.gd")
 const Matter = preload("res://scripts/matter_rules.gd")
 const Rules = preload("res://scripts/combat_rules.gd")
 
@@ -43,6 +44,7 @@ const MANA_COLOR = Color(0.48, 0.74, 1.0)
 @export_range(20.0, 55.0, 1.0) var hex_radius: float = 35.0
 @export var ally_stats: SuleynUnitStats = preload("res://data/demo_male_lv25.tres")
 @export var enemy_stats: SuleynUnitStats = preload("res://data/demo_female_lv25.tres")
+@export var enemy_ai_enabled: bool = true
 ## 0..3 = legacy duels, 4 = team battle. Fixed order is NOT a GDD initiative rule.
 var encounter_index: int = TEAM_ENCOUNTER
 
@@ -71,6 +73,9 @@ var message: String = ""
 var casting_mode: bool = false
 var special_mode: bool = false
 var visual_clock: float = 0.0
+const AI_THINK_SECONDS: float = 0.65
+var ai_waiting_unit_id: String = ""
+var ai_delay_remaining: float = AI_THINK_SECONDS
 
 var journal: RichTextLabel
 var animation_time: float = 1.0
@@ -149,6 +154,7 @@ func reset_demo() -> void:
     casting_mode = false
     special_mode = false
     visual_clock = 0.0
+    reset_ai_wait()
     animation_stunned = false
     animation_time = ANIMATION_DURATION
     concussion_skip_pending = false
@@ -160,8 +166,10 @@ func reset_demo() -> void:
     message = "Ходит %s. Выберите бойца, затем зелёный гекс или противника." % unit_label(turns.active_unit_id())
     if journal != null:
         journal.clear()
-    log_event("═══ НОВЫЙ БОЙ · v1.5 · СЦЕНАРИЙ %d/%d ═══" % [encounter_index + 1, ENCOUNTER_COUNT], "#ffdc86")
-    log_event("Две команды, ручное управление обеими. Одно действие: движение, атака или пропуск.")
+    log_event("═══ НОВЫЙ БОЙ · v1.6 · СЦЕНАРИЙ %d/%d ═══" % [encounter_index + 1, ENCOUNTER_COUNT], "#ffdc86")
+    log_event("Управление: %s. Одно действие: движение, атака или пропуск." % control_description())
+    if encounter_index == TEAM_ENCOUNTER:
+        log_event("A — переключить ИИ красной команды и ручное управление.", "#ffda87")
     log_event("Фиксированная тестовая очередь; это не окончательное правило инициативы.", "#ffda87")
     for unit_id in roster_order:
         var unit = units[unit_id]
@@ -194,6 +202,105 @@ func can_perform_action(unit_id: String) -> bool:
         and animation_time >= ANIMATION_DURATION and units.has(unit_id)
         and units[unit_id].is_alive() and units[unit_id].concussion_turns_remaining <= 0
         and turns.can_act(unit_id))
+
+
+func ai_controls_unit(unit_id: String) -> bool:
+    return (enemy_ai_enabled and encounter_index == TEAM_ENCOUNTER
+        and units.has(unit_id) and units[unit_id].side == "red")
+
+
+func is_ai_turn() -> bool:
+    return not battle_over and turns != null and ai_controls_unit(turns.active_unit_id())
+
+
+func can_issue_action(unit_id: String, ai_action: bool = false) -> bool:
+    return can_perform_action(unit_id) and ai_controls_unit(unit_id) == ai_action
+
+
+func control_description() -> String:
+    if encounter_index == TEAM_ENCOUNTER and enemy_ai_enabled:
+        return "синие — игрок, красные — ИИ"
+    return "обе команды вручную"
+
+
+func reset_ai_wait() -> void:
+    ai_waiting_unit_id = ""
+    ai_delay_remaining = AI_THINK_SECONDS
+
+
+func toggle_enemy_ai() -> void:
+    if encounter_index != TEAM_ENCOUNTER:
+        return
+    enemy_ai_enabled = not enemy_ai_enabled
+    reset_ai_wait()
+    clear_selection()
+    message = "Управление: %s. A — переключить." % control_description()
+    log_event(message, "#b3d5e5")
+    queue_redraw()
+
+
+func update_ai(delta: float) -> void:
+    if not is_ai_turn() or not can_perform_action(turns.active_unit_id()):
+        reset_ai_wait()
+        return
+    var active: String = turns.active_unit_id()
+    if ai_waiting_unit_id != active:
+        ai_waiting_unit_id = active
+        ai_delay_remaining = AI_THINK_SECONDS
+    ai_delay_remaining = maxf(0.0, ai_delay_remaining - maxf(0.0, delta))
+    if ai_delay_remaining > 0.0:
+        return
+    perform_ai_turn()
+    reset_ai_wait()
+
+
+func perform_ai_turn() -> void:
+    if not is_ai_turn():
+        return
+    var active: String = turns.active_unit_id()
+    if not can_perform_action(active):
+        return
+    var decision: Dictionary = BattleAI.choose_action(board, units, active)
+    var saved_casting: bool = casting_mode
+    var saved_special: bool = special_mode
+    log_event("[b]ИИ · %s[/b]" % unit_label(active), "#f7acb0")
+    match str(decision.get("kind", "pass")):
+        "attack":
+            var mode: String = str(decision.get("mode", "basic"))
+            casting_mode = mode == "magic"
+            special_mode = mode == "special"
+            attack_enemy(active, str(decision.get("target_id", "")), -1.0, -1.0, -1.0, true)
+        "move":
+            move_active_unit(active, decision.get("cell", INVALID_CELL), true)
+        _:
+            pass_turn(true)
+    # AI modes never overwrite the player's chosen mode for the next blue turn.
+    casting_mode = saved_casting
+    special_mode = saved_special
+    # A stale/invalid plan must not leave an automated turn waiting forever.
+    if not battle_over and turns.active_unit_id() == active and turns.can_act(active):
+        pass_turn(true)
+    queue_redraw()
+
+
+func move_active_unit(unit_id: String, cell: Vector2i, ai_action: bool = false) -> bool:
+    if not can_issue_action(unit_id, ai_action):
+        return false
+    var distances: Dictionary = board.reachable_from(
+        board.position_of(unit_id), units[unit_id].movement, unit_id)
+    var steps: int = int(distances.get(cell, 0))
+    if steps <= 0 or not board.move_unit(unit_id, cell):
+        return false
+    var round_before: int = turns.round_number
+    turns.spend_action(unit_id)
+    var regen: int = end_active_turn(unit_id)
+    clear_selection()
+    message = "%s переместился на %d гекса. Теперь ходит %s." % [
+        unit_label(unit_id), steps, unit_label(turns.active_unit_id())]
+    log_event("Раунд %d · %s: движение на %d гекса; MP +%d." % [
+        round_before, unit_label(unit_id), steps, regen], "#b9d6ec")
+    queue_redraw()
+    return true
 
 
 func make_unit(unit_id: String, side: String, stats: SuleynUnitStats):
@@ -259,6 +366,8 @@ func make_unit(unit_id: String, side: String, stats: SuleynUnitStats):
 
 
 func _process(delta: float) -> void:
+    var animation_was_playing: bool = animation_time < ANIMATION_DURATION
+    var concussion_was_pending: bool = concussion_skip_pending
     visual_clock += delta
     if animation_time < ANIMATION_DURATION:
         animation_time = minf(ANIMATION_DURATION, animation_time + delta)
@@ -279,6 +388,9 @@ func _process(delta: float) -> void:
             if units[unit_id].is_alive() and units[unit_id].concussion_turns_remaining > 0:
                 queue_redraw()  # Rotate stars between the first and second skip.
                 break
+    # A newly available AI turn starts its own pause on the following frame.
+    if not animation_was_playing and not concussion_was_pending:
+        update_ai(delta)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -301,23 +413,25 @@ func _unhandled_input(event: InputEvent) -> void:
                 reset_demo()
             elif event.keycode == KEY_T:
                 switch_encounter()
+            elif event.keycode == KEY_A:
+                toggle_enemy_ai()
             elif event.keycode == KEY_SPACE:
                 pass_turn()
             elif event.keycode == KEY_M:
                 debug_spend_mana()
-            elif event.keycode == KEY_1:
+            elif event.keycode == KEY_1 and not is_ai_turn():
                 casting_mode = false
                 special_mode = false
                 message = "Режим: ОБЫЧНЫЙ УДАР, сила из профиля бойца, бесплатно, дистанция 1."
                 log_event("Режим → обычная физическая атака (1).", "#b3d5e5")
                 queue_redraw()
-            elif event.keycode == KEY_2:
+            elif event.keycode == KEY_2 and not is_ai_turn():
                 casting_mode = false
                 special_mode = true
                 message = "Режим: ДОПОЛНИТЕЛЬНОЕ УМЕНИЕ (2). Дальность зависит от героя."
                 log_event("Режим → дополнительное физическое умение (2).", "#b3d5e5")
                 queue_redraw()
-            elif event.keycode == KEY_F:
+            elif event.keycode == KEY_F and not is_ai_turn():
                 casting_mode = not casting_mode
                 if casting_mode:
                     special_mode = false
@@ -338,15 +452,18 @@ func cell_under_cursor() -> Vector2i:
     return cell
 
 
-func click_cell(cell: Vector2i) -> void:
+func click_cell(cell: Vector2i, ai_action: bool = false) -> void:
     if battle_over or concussion_skip_pending or not board.contains(cell) or animation_time < ANIMATION_DURATION:
         return
     var active: String = turns.active_unit_id()
-    if not can_perform_action(active):
-        return
     var clicked_unit: String = board.unit_at(cell)
     if not clicked_unit.is_empty():
         inspected_unit_id = clicked_unit
+    if not can_issue_action(active, ai_action):
+        if is_ai_turn():
+            message = "Ход красной команды выполняет ИИ. A — ручное управление."
+        queue_redraw()
+        return
     if clicked_unit == active:
         selected_unit_id = active
         refresh_reachable()
@@ -359,25 +476,13 @@ func click_cell(cell: Vector2i) -> void:
         elif not can_target_with_mode(active, clicked_unit):
             message = "Цель вне дальности или выбранная атака не назначена."
         else:
-            attack_enemy(active, clicked_unit)
+            attack_enemy(active, clicked_unit, -1.0, -1.0, -1.0, ai_action)
     elif selected_unit_id == active:
         if not reachable.has(cell):
             message = "Гекс недоступен или вне тестового радиуса перемещения."
         else:
-            var steps: int = reachable[cell]
-            var round_before: int = turns.round_number
-            if steps == 0:
-                message = "Выберите другой гекс или нажмите Space для пропуска."
-            elif board.move_unit(active, cell):
-                turns.spend_action(active)
-                var regen: int = end_active_turn(active)
-                clear_selection()
-                message = "%s переместился на %d гекса. Теперь ходит %s." % [
-                    unit_label(active), steps, unit_label(turns.active_unit_id())]
-                log_event("Раунд %d · %s: движение на %d гекса; MP +%d." % [
-                    round_before, unit_label(active), steps, regen], "#b9d6ec")
-            else:
-                message = "Не удалось переместиться."
+            if not move_active_unit(active, cell, ai_action):
+                message = "Выберите другой свободный гекс или нажмите Space для пропуска."
     else:
         message = "Выберите %s; 1 — удар, 2 — умение, F — магия." % unit_label(active)
     queue_redraw()
@@ -395,8 +500,8 @@ func can_target_with_mode(attacker_id: String, defender_id: String) -> bool:
 
 
 func attack_enemy(attacker_id: String, defender_id: String, dodge_roll: float = -1.0,
-        crit_roll: float = -1.0, concussion_roll: float = -1.0) -> void:
-    if not can_perform_action(attacker_id) or not units.has(defender_id):
+        crit_roll: float = -1.0, concussion_roll: float = -1.0, ai_action: bool = false) -> void:
+    if not can_issue_action(attacker_id, ai_action) or not units.has(defender_id):
         return
     var attack_is_magic: bool = casting_mode
     var attack_is_special: bool = special_mode and not attack_is_magic
@@ -498,6 +603,7 @@ func end_active_turn(unit_id: String) -> int:
 
 func advance_turn(previous_id: String) -> void:
     if not battle_over and turns.next_turn(previous_id):
+        reset_ai_wait()
         inspected_unit_id = turns.active_unit_id()
         prepare_next_concussion_skip()
 
@@ -554,7 +660,7 @@ func debug_spend_mana() -> void:
     if battle_over or concussion_skip_pending:
         return
     var active: String = turns.active_unit_id()
-    if not can_perform_action(active):
+    if not can_issue_action(active):
         return
     if units[active].spend_mana(20):
         message = "%s потратил 20 MP. Регенерация произойдёт в конце хода." % unit_label(active)
@@ -573,11 +679,11 @@ func opponents_alive(attacker_side: String) -> bool:
     return false
 
 
-func pass_turn() -> void:
+func pass_turn(ai_action: bool = false) -> void:
     if battle_over or concussion_skip_pending or animation_time < ANIMATION_DURATION:
         return
     var active: String = turns.active_unit_id()
-    if not can_perform_action(active):
+    if not can_issue_action(active, ai_action):
         return
     var round_before: int = turns.round_number
     turns.spend_action(active)
@@ -618,7 +724,7 @@ func _draw() -> void:
     draw_rect(Rect2(Vector2(879, 98), Vector2(530, 735)), Color(0.12, 0.18, 0.23), true)
     draw_text(Vector2(35, 47), "СУЛЭЙН  /  КОМАНДНЫЙ БОЙ", 27, WHITE)
     var encounter_caption: String = "3 НА 3" if encounter_index == TEAM_ENCOUNTER else "ДУЭЛЬ"
-    draw_text(Vector2(36, 78), "v1.5 · %s · ФИКСИРОВАННАЯ ОЧЕРЕДЬ · T — СЦЕНАРИЙ %d/5" % [encounter_caption, encounter_index + 1], 16, MUTED)
+    draw_text(Vector2(36, 78), "v1.6 · %s · ФИКСИРОВАННАЯ ОЧЕРЕДЬ · T — СЦЕНАРИЙ %d/5" % [encounter_caption, encounter_index + 1], 16, MUTED)
 
     for r in range(board.rows):
         for q in range(board.columns):
@@ -834,7 +940,7 @@ func draw_sidebar() -> void:
     if battle_over:
         draw_text(Vector2(1050, 126), "ПОБЕДА: %s" % side_label(winner_side), 16, PATH_COLOR)
     else:
-        var turn_caption: String = "ПРОПУСК: %s" if concussion_skip_pending else "ХОДИТ: %s"
+        var turn_caption: String = "ПРОПУСК: %s" if concussion_skip_pending else ("ИИ: %s" if is_ai_turn() else "ХОДИТ: %s")
         draw_text(Vector2(1050, 126), turn_caption % unit_label(active), 16, PATH_COLOR if concussion_skip_pending else WHITE)
     var queue_tokens: PackedStringArray = []
     for offset in range(turns.turn_order.size()):
@@ -860,7 +966,8 @@ func draw_sidebar() -> void:
         draw_commander_row(detail_id, ALLY if units[detail_id].side == "blue" else ENEMY, 371)
     draw_rect(Rect2(Vector2(893, 531), Vector2(503, 294)), Color(0.055, 0.090, 0.13), true)
     var mode: String = "МАГИЯ" if casting_mode else ("УМЕНИЕ (2)" if special_mode else "ОБЫЧНЫЙ (1)")
-    draw_text(Vector2(901, 513), "РЕЖИМ: %s · обе команды вручную" % mode, 14, PATH_COLOR)
+    var controller: String = "красные: ИИ (A)" if encounter_index == TEAM_ENCOUNTER and enemy_ai_enabled else ("ручной бой (A)" if encounter_index == TEAM_ENCOUNTER else "ручной бой")
+    draw_text(Vector2(901, 513), "%s · %s" % [mode, controller], 14, PATH_COLOR)
     draw_text(Vector2(903, 548), "ЖУРНАЛ БОЯ  /  MP, КРИТЫ, КОНТУЗИЯ", 15, PATH_COLOR)
 
 
@@ -912,7 +1019,8 @@ func draw_monster_row(unit_id: String, fill: Color, y: float) -> void:
 
 func draw_instructions() -> void:
     draw_text(Vector2(40, 810), "ЛКМ: активный боец → зелёный гекс / враг. Одно действие за ход.", 17, WHITE)
-    draw_text(Vector2(40, 839), "1 — удар    2 — умение    F — магия    Space — пропуск    R — сброс    T — сценарий", 15, MUTED)
+    var ai_hint: String = "   A — ИИ" if encounter_index == TEAM_ENCOUNTER else ""
+    draw_text(Vector2(40, 839), "1 — удар   2 — умение   F — магия   Space — пропуск   R — сброс   T — сценарий" + ai_hint, 15, MUTED)
     draw_text(Vector2(40, 872), message, 16, PATH_COLOR)
 
 

@@ -38,6 +38,7 @@ func check(ok: bool, description: String) -> void:
 
 func new_demo():
     var demo = Demo.new()
+    demo.enemy_ai_enabled = false  # This suite preserves the manual v1.5 battle contract.
     demo.reset_demo()
     return demo
 
