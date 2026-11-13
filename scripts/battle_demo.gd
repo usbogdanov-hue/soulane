@@ -1,5 +1,5 @@
 extends Node2D
-## SULEYN v1.6: red AI with a manual toggle, two teams, fixed demo queue and switchable legacy duels,
+## SULEYN v1.7: roster selection and deployment before battle; red AI with a manual toggle, two teams, fixed demo queue and switchable legacy duels,
 ## attack animation, HP/MP under units and a scrollable combat journal.
 ## Gameplay mathematics remain in battle_combat.gd and damage_calculator.gd.
 
@@ -9,6 +9,8 @@ const BattleTurns = preload("res://scripts/battle_turns.gd")
 const BattleUnit = preload("res://scripts/battle_unit.gd")
 const BattleCombat = preload("res://scripts/battle_combat.gd")
 const BattleAI = preload("res://scripts/battle_ai.gd")
+const BattleSetup = preload("res://scripts/battle_setup.gd")
+const PreparationUI = preload("res://scripts/battle_preparation_ui.gd")
 const Matter = preload("res://scripts/matter_rules.gd")
 const Rules = preload("res://scripts/combat_rules.gd")
 
@@ -45,6 +47,7 @@ const MANA_COLOR = Color(0.48, 0.74, 1.0)
 @export var ally_stats: SuleynUnitStats = preload("res://data/demo_male_lv25.tres")
 @export var enemy_stats: SuleynUnitStats = preload("res://data/demo_female_lv25.tres")
 @export var enemy_ai_enabled: bool = true
+@export var start_in_preparation: bool = false
 ## 0..3 = legacy duels, 4 = team battle. Fixed order is NOT a GDD initiative rule.
 var encounter_index: int = TEAM_ENCOUNTER
 
@@ -56,8 +59,15 @@ func encounter_enemy_stats() -> SuleynUnitStats:
     return enemy_stats
 
 func switch_encounter() -> void:
+    if preparing:
+        return
     encounter_index = (encounter_index + 1) % ENCOUNTER_COUNT
     reset_demo()
+
+var preparing: bool = false
+var team_setup = null
+var preparation_ui = null
+var new_battle_button: Button
 
 var board
 var turns
@@ -100,7 +110,99 @@ var animation_stunned: bool = false
 
 func _ready() -> void:
     create_journal()
+    create_new_battle_button()
     reset_demo()
+    if start_in_preparation:
+        open_preparation()
+
+
+func create_new_battle_button() -> void:
+    new_battle_button = Button.new()
+    new_battle_button.text = "Новый бой (P)"
+    new_battle_button.position = Vector2(1190, 34)
+    new_battle_button.size = Vector2(210, 38)
+    new_battle_button.pressed.connect(open_preparation)
+    add_child(new_battle_button)
+
+
+func open_preparation() -> void:
+    if preparing:
+        return
+    preparing = true
+    reset_ai_wait()
+    clear_selection()
+    if journal != null:
+        journal.hide()
+    if new_battle_button != null:
+        new_battle_button.hide()
+    if is_instance_valid(preparation_ui):
+        preparation_ui.free()
+    var draft = team_setup.copy() if team_setup != null else BattleSetup.new(demo_columns, demo_rows)
+    draft.enemy_ai_enabled = enemy_ai_enabled
+    preparation_ui = PreparationUI.new()
+    preparation_ui.configure(draft)
+    preparation_ui.deployment_requested.connect(preview_preparation)
+    preparation_ui.placement_changed.connect(preview_preparation)
+    preparation_ui.selection_changed.connect(_on_preparation_selection)
+    preparation_ui.battle_requested.connect(start_prepared_battle)
+    add_child(preparation_ui)
+    queue_redraw()
+
+
+func _on_preparation_selection(unit_id: String) -> void:
+    selected_unit_id = unit_id
+    inspected_unit_id = unit_id
+    queue_redraw()
+
+
+func populate_prepared_team(configuration) -> void:
+    board = BattleBoard.new(configuration.columns, configuration.rows)
+    units.clear()
+    roster_order.clear()
+    for unit_id in configuration.unit_ids():
+        add_combatant(unit_id, configuration.team_for(unit_id),
+            configuration.profile_stats(unit_id), configuration.positions[unit_id])
+
+
+func preview_preparation() -> void:
+    if not preparing or not is_instance_valid(preparation_ui):
+        return
+    var draft = preparation_ui.setup
+    if not draft.is_valid():
+        return
+    encounter_index = TEAM_ENCOUNTER
+    populate_prepared_team(draft)
+    turns = BattleTurns.new(roster_order)
+    selected_unit_id = preparation_ui.selected_unit_id
+    inspected_unit_id = selected_unit_id
+    animation_time = ANIMATION_DURATION
+    animation_attacker = ""
+    animation_defender = ""
+    concussion_skip_pending = false
+    concussion_notice_time = 0.0
+    reachable.clear()
+    reset_ai_wait()
+    queue_redraw()
+
+
+func start_prepared_battle() -> bool:
+    if not preparing or not is_instance_valid(preparation_ui) or preparation_ui.stage != "deployment":
+        return false
+    if not preparation_ui.setup.is_valid():
+        message = "Проверьте состав и расстановку: " + "; ".join(preparation_ui.setup.validation_errors())
+        preparation_ui.set_status(message)
+        return false
+    team_setup = preparation_ui.setup.copy()
+    enemy_ai_enabled = team_setup.enemy_ai_enabled
+    encounter_index = TEAM_ENCOUNTER
+    preparing = false
+    preparation_ui.hide()
+    if journal != null:
+        journal.show()
+    if new_battle_button != null:
+        new_battle_button.show()
+    reset_demo()
+    return true
 
 
 func create_journal() -> void:
@@ -131,7 +233,9 @@ func reset_demo() -> void:
     var center_row: int = demo_rows / 2
     units.clear()
     roster_order.clear()
-    if encounter_index == TEAM_ENCOUNTER:
+    if encounter_index == TEAM_ENCOUNTER and team_setup != null:
+        populate_prepared_team(team_setup)
+    elif encounter_index == TEAM_ENCOUNTER:
         # Reuse the v1.4 resources without introducing new balance values.
         var blue_stats: Array[SuleynUnitStats] = [ally_stats, enemy_stats, TEST_FALCON]
         var red_stats: Array[SuleynUnitStats] = [TEST_HELLHOUND, TEST_FALCON, TEST_LICH]
@@ -166,7 +270,7 @@ func reset_demo() -> void:
     message = "Ходит %s. Выберите бойца, затем зелёный гекс или противника." % unit_label(turns.active_unit_id())
     if journal != null:
         journal.clear()
-    log_event("═══ НОВЫЙ БОЙ · v1.6 · СЦЕНАРИЙ %d/%d ═══" % [encounter_index + 1, ENCOUNTER_COUNT], "#ffdc86")
+    log_event("═══ НОВЫЙ БОЙ · v1.7 · СЦЕНАРИЙ %d/%d ═══" % [encounter_index + 1, ENCOUNTER_COUNT], "#ffdc86")
     log_event("Управление: %s. Одно действие: движение, атака или пропуск." % control_description())
     if encounter_index == TEAM_ENCOUNTER:
         log_event("A — переключить ИИ красной команды и ручное управление.", "#ffda87")
@@ -198,7 +302,7 @@ func unit_token(unit_id: String) -> String:
 
 
 func can_perform_action(unit_id: String) -> bool:
-    return (not battle_over and not concussion_skip_pending
+    return (not preparing and not battle_over and not concussion_skip_pending
         and animation_time >= ANIMATION_DURATION and units.has(unit_id)
         and units[unit_id].is_alive() and units[unit_id].concussion_turns_remaining <= 0
         and turns.can_act(unit_id))
@@ -210,7 +314,7 @@ func ai_controls_unit(unit_id: String) -> bool:
 
 
 func is_ai_turn() -> bool:
-    return not battle_over and turns != null and ai_controls_unit(turns.active_unit_id())
+    return not preparing and not battle_over and turns != null and ai_controls_unit(turns.active_unit_id())
 
 
 func can_issue_action(unit_id: String, ai_action: bool = false) -> bool:
@@ -229,7 +333,7 @@ func reset_ai_wait() -> void:
 
 
 func toggle_enemy_ai() -> void:
-    if encounter_index != TEAM_ENCOUNTER:
+    if preparing or encounter_index != TEAM_ENCOUNTER:
         return
     enemy_ai_enabled = not enemy_ai_enabled
     reset_ai_wait()
@@ -366,6 +470,8 @@ func make_unit(unit_id: String, side: String, stats: SuleynUnitStats):
 
 
 func _process(delta: float) -> void:
+    if preparing:
+        return
     var animation_was_playing: bool = animation_time < ANIMATION_DURATION
     var concussion_was_pending: bool = concussion_skip_pending
     visual_clock += delta
@@ -394,6 +500,13 @@ func _process(delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+    if preparing:
+        if event is InputEventMouseMotion:
+            hovered_cell = cell_under_cursor()
+            queue_redraw()
+        elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+            preparation_ui.handle_board_click(cell_under_cursor())
+        return
     if event is InputEventMouseMotion:
         var new_hover: Vector2i = cell_under_cursor()
         if new_hover != hovered_cell:
@@ -409,7 +522,9 @@ func _unhandled_input(event: InputEvent) -> void:
                 click_cell(cell_under_cursor())
     elif event is InputEventKey:
         if event.pressed and not event.echo:
-            if event.keycode == KEY_R:
+            if event.keycode == KEY_P:
+                open_preparation()
+            elif event.keycode == KEY_R:
                 reset_demo()
             elif event.keycode == KEY_T:
                 switch_encounter()
@@ -594,7 +709,7 @@ func attack_enemy(attacker_id: String, defender_id: String, dodge_roll: float = 
 
 
 func end_active_turn(unit_id: String) -> int:
-    if battle_over or unit_id != turns.active_unit_id() or not units.has(unit_id):
+    if preparing or battle_over or unit_id != turns.active_unit_id() or not units.has(unit_id):
         return 0
     var regenerated: int = units[unit_id].regenerate_mana_end_turn()
     advance_turn(unit_id)
@@ -602,7 +717,7 @@ func end_active_turn(unit_id: String) -> int:
 
 
 func advance_turn(previous_id: String) -> void:
-    if not battle_over and turns.next_turn(previous_id):
+    if not preparing and not battle_over and turns.next_turn(previous_id):
         reset_ai_wait()
         inspected_unit_id = turns.active_unit_id()
         prepare_next_concussion_skip()
@@ -628,7 +743,7 @@ func prepare_next_concussion_skip() -> void:
 func resolve_one_concussion_skip() -> void:
     # Called once per stunned character's turn opportunity, never twice for
     # the same opportunity. Other living units get their turns between skips.
-    if not concussion_skip_pending:
+    if preparing or not concussion_skip_pending:
         return
     concussion_skip_pending = false
     concussion_preview_time = 0.0
@@ -713,18 +828,21 @@ func unit_label(unit_id: String) -> String:
 
 func refresh_reachable() -> void:
     reachable.clear()
-    if not battle_over and selected_unit_id == turns.active_unit_id():
+    if not preparing and not battle_over and selected_unit_id == turns.active_unit_id():
         reachable = board.reachable_from(
             board.position_of(selected_unit_id), units[selected_unit_id].movement, selected_unit_id)
 
 
 func _draw() -> void:
     draw_rect(Rect2(Vector2.ZERO, Vector2(1440, 900)), BACKGROUND)
+    if preparing and is_instance_valid(preparation_ui) and preparation_ui.stage == "roster":
+        return
     draw_rect(Rect2(Vector2(28, 98), Vector2(823, 679)), Color(0.10, 0.14, 0.18), true)
     draw_rect(Rect2(Vector2(879, 98), Vector2(530, 735)), Color(0.12, 0.18, 0.23), true)
-    draw_text(Vector2(35, 47), "СУЛЭЙН  /  КОМАНДНЫЙ БОЙ", 27, WHITE)
+    draw_text(Vector2(35, 47), "СУЛЭЙН  /  РАССТАНОВКА" if preparing else "СУЛЭЙН  /  КОМАНДНЫЙ БОЙ", 27, WHITE)
     var encounter_caption: String = "3 НА 3" if encounter_index == TEAM_ENCOUNTER else "ДУЭЛЬ"
-    draw_text(Vector2(36, 78), "v1.6 · %s · ФИКСИРОВАННАЯ ОЧЕРЕДЬ · T — СЦЕНАРИЙ %d/5" % [encounter_caption, encounter_index + 1], 16, MUTED)
+    var heading: String = "v1.7 · СИНИЕ — ДВА ЛЕВЫХ СТОЛБЦА · КРАСНЫЕ — ДВА ПРАВЫХ" if preparing else "v1.7 · %s · ФИКСИРОВАННАЯ ОЧЕРЕДЬ · T — СЦЕНАРИЙ %d/5" % [encounter_caption, encounter_index + 1]
+    draw_text(Vector2(36, 78), heading, 16, MUTED)
 
     for r in range(board.rows):
         for q in range(board.columns):
@@ -734,6 +852,14 @@ func _draw() -> void:
             var fill: Color = HEX_DARK if (q + r) % 2 == 0 else HEX_LIGHT
             if board.blocked.has(cell):
                 fill = Color(0.25, 0.25, 0.28)
+            elif preparing:
+                if preparation_ui.setup.cell_is_deployment("blue", cell):
+                    fill = fill.lerp(ALLY, 0.28)
+                elif preparation_ui.setup.cell_is_deployment("red", cell):
+                    fill = fill.lerp(ENEMY, 0.28)
+                var side: String = preparation_ui.setup.team_for(selected_unit_id)
+                if preparation_ui.setup.cell_is_deployment(side, cell) and board.unit_at(cell).is_empty():
+                    fill = fill.lerp(AVAILABLE, 0.4)
             elif reachable.has(cell) and board.unit_at(cell).is_empty():
                 fill = AVAILABLE
             if cell == hovered_cell:
@@ -746,6 +872,11 @@ func _draw() -> void:
     draw_hover_path()
     for unit_id in roster_order:
         draw_unit(unit_id, ALLY if units[unit_id].side == "blue" else ENEMY)
+    if preparing:
+        draw_text(Vector2(40, 810), "Выберите бойца на поле или справа, затем свободный гекс своей зоны.", 16, WHITE)
+        draw_text(Vector2(40, 839), "Составы и расстановка тестовые. Действия боя начнутся после кнопки «Начать бой».", 14, MUTED)
+        draw_text(Vector2(40, 872), "Выбран: %s" % unit_label(selected_unit_id), 16, PATH_COLOR)
+        return
     draw_damage_popup()
     draw_concussion_turn_notice()
     draw_sidebar()
@@ -753,7 +884,7 @@ func _draw() -> void:
 
 
 func draw_hover_path() -> void:
-    if battle_over or selected_unit_id != turns.active_unit_id() or not reachable.has(hovered_cell):
+    if preparing or battle_over or selected_unit_id != turns.active_unit_id() or not reachable.has(hovered_cell):
         return
     var path: Array[Vector2i] = board.shortest_path(
         board.position_of(selected_unit_id), hovered_cell, selected_unit_id)
@@ -770,9 +901,9 @@ func draw_unit(unit_id: String, fill: Color) -> void:
     var center: Vector2 = center_of(cell)
     if selected_unit_id == unit_id:
         draw_arc(center, hex_radius * 0.88, 0.0, TAU, 48, PATH_COLOR, 3.0, true)
-    if not battle_over and turns.active_unit_id() == unit_id:
+    if not preparing and not battle_over and turns.active_unit_id() == unit_id:
         draw_arc(center, hex_radius * 0.98, 0.0, TAU, 48, PATH_COLOR, 2.0, true)
-    if selected_unit_id != "" and selected_unit_id != unit_id:
+    if not preparing and selected_unit_id != "" and selected_unit_id != unit_id:
         if can_target_with_mode(selected_unit_id, unit_id):
             draw_arc(center, hex_radius * 1.06, 0.0, TAU, 48, ATTACK_COLOR, 3.0, true)
 
