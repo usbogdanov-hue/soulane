@@ -6,6 +6,8 @@ Requires Godot and its matching Web release export template. Does not publish.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 from pathlib import Path
 import subprocess
 import re
@@ -27,6 +29,14 @@ def main() -> None:
     args = parser.parse_args()
     output = args.output.expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
+    stamp = output / ".suleyn-export.json"
+    stamp.unlink(missing_ok=True)
+    dirty = subprocess.check_output(
+        ["git", "status", "--porcelain", "--", "scripts", "data", "scenes", "project.godot"],
+        cwd=ROOT, text=True,
+    )
+    if any(not line.endswith(".gd.uid") for line in dirty.splitlines()):
+        raise SystemExit("Commit game source changes before exporting a versioned preview")
     run_godot([args.godot, "--headless", "--editor", "--path", str(ROOT), "--import"])
     run_godot([args.godot, "--headless", "--path", str(ROOT), "--export-release", "Web", str(output / "index.html")])
     required = ("index.html", "index.js", "index.wasm", "index.pck")
@@ -37,6 +47,14 @@ def main() -> None:
     with (output / "index.wasm").open("rb") as engine:
         if engine.read(8) != b"\0asm\x01\0\0\0":
             raise SystemExit("Exported index.wasm has an invalid WebAssembly header")
+    source_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    engine_version = subprocess.check_output([args.godot, "--version"], text=True).strip()
+    stamp.write_text(json.dumps({
+        "source_commit": source_commit,
+        "engine_version": engine_version,
+        "wasm_sha256": hashlib.sha256((output / "index.wasm").read_bytes()).hexdigest(),
+        "pck_sha256": hashlib.sha256((output / "index.pck").read_bytes()).hexdigest(),
+    }, indent=2) + "\n")
     for path in sorted(output.iterdir()):
         if path.is_file():
             print(f"{path.name}: {path.stat().st_size} bytes")
