@@ -7,6 +7,7 @@ signal placement_changed
 signal selection_changed(unit_id: String)
 signal battle_requested
 
+const Arena = preload("res://scripts/battle_arena.gd")
 const PROFILE_KEYS: Array[String] = ["male", "female", "falcon", "hellhound", "lich"]
 const PROFILE_LABELS: Dictionary = {
     "male": "Мужчина · булава", "female": "Женщина · копьё", "falcon": "Сокол",
@@ -26,6 +27,8 @@ var roster_status_label: Label
 var start_button: Button
 var next_button: Button
 var ai_checkbox: CheckBox
+var arena_option: OptionButton
+var deployment_hint: Label
 var profile_options: Dictionary = {}
 var profile_summaries: Dictionary = {}
 var unit_buttons: Dictionary = {}
@@ -88,6 +91,9 @@ func handle_board_click(cell: Vector2i) -> void:
         _status_override = ""
         _refresh_deployment()
         selection_changed.emit(selected_unit_id)
+        return
+    if setup.is_blocked(cell):
+        set_status("Этот гекс закрыт препятствием. Выберите свободный гекс своей зоны.")
         return
     if not setup.place_unit(selected_unit_id, cell):
         var zone: String = "двух левых" if setup.team_for(selected_unit_id) == "blue" else "двух правых"
@@ -199,14 +205,23 @@ func _build_roster() -> void:
             panel.add_child(option)
             profile_options[unit_id] = option
             profile_summaries[unit_id] = _label(panel, "", Vector2(22, y + 48), Vector2(589, 65), 14, MUTED)
+    _label(roster_root, "Арена", Vector2(80, 680), Vector2(90, 32), 18, GOLD)
+    arena_option = OptionButton.new()
+    arena_option.name = "Arena"
+    arena_option.position = Vector2(170, 675)
+    arena_option.size = Vector2(480, 42)
+    for arena_key in Arena.keys():
+        arena_option.add_item(Arena.label(arena_key))
+    arena_option.item_selected.connect(_on_arena_selected)
+    roster_root.add_child(arena_option)
     ai_checkbox = CheckBox.new()
     ai_checkbox.name = "RedAI"
     ai_checkbox.text = "Красной командой управляет ИИ"
-    ai_checkbox.position = Vector2(80, 675)
-    ai_checkbox.size = Vector2(800, 42)
+    ai_checkbox.position = Vector2(760, 675)
+    ai_checkbox.size = Vector2(620, 42)
     ai_checkbox.toggled.connect(_on_ai_toggled)
     roster_root.add_child(ai_checkbox)
-    roster_status_label = _label(roster_root, "", Vector2(80, 718), Vector2(1280, 34), 16, GOLD)
+    roster_status_label = _label(roster_root, "", Vector2(80, 718), Vector2(1280, 42), 15, GOLD)
     _button(roster_root, "Вернуть пример 3 × 3", Vector2(80, 765), Vector2(300, 50), _on_defaults_pressed)
     next_button = _button(roster_root, "Далее: расстановка →", Vector2(1015, 765), Vector2(365, 50), _on_next_pressed)
     next_button.name = "NextDeployment"
@@ -220,7 +235,7 @@ func _build_deployment() -> void:
     add_child(deployment_root)
     var panel := _panel(deployment_root, Vector2(879, 98), Vector2(530, 735), Color(0.085, 0.14, 0.19))
     _label(panel, "2 / РАССТАНОВКА", Vector2(22, 16), Vector2(486, 36), 23, GOLD)
-    _label(panel, "Выберите бойца в списке или на поле.\nЗатем нажмите свободный гекс его зоны.", Vector2(22, 57), Vector2(486, 54), 16, MUTED)
+    deployment_hint = _label(panel, "", Vector2(22, 57), Vector2(486, 54), 16, MUTED)
     _label(panel, "СИНИЕ — ДВЕ ЛЕВЫЕ КОЛОНКИ · КРАСНЫЕ — ДВЕ ПРАВЫЕ", Vector2(22, 118), Vector2(486, 29), 12, MUTED)
     var slot: int = 0
     for unit_id in setup.unit_ids():
@@ -245,13 +260,18 @@ func _refresh_roster() -> void:
         var key: String = setup.profile_key(unit_id)
         profile_options[unit_id].select(PROFILE_KEYS.find(key))
         profile_summaries[unit_id].text = _profile_summary(key)
+    var arena_keys: Array[String] = Arena.keys()
+    for index in range(arena_keys.size()):
+        arena_option.set_item_disabled(index, not Arena.is_supported(arena_keys[index], setup.columns, setup.rows))
+    arena_option.select(arena_keys.find(setup.arena_key))
     ai_checkbox.set_pressed_no_signal(setup.enemy_ai_enabled)
     next_button.disabled = not setup.is_valid()
-    roster_status_label.text = "Каждая команда: 3 бойца. Очерёдность и боевые правила сохраняются." if setup.is_valid() else _validation_message()
+    roster_status_label.text = "Тестовая арена «%s»: %s Закрытые гексы непроходимы." % [setup.arena_label(), setup.arena_description()] if setup.is_valid() else _validation_message()
     _refreshing = false
 
 
 func _refresh_deployment() -> void:
+    deployment_hint.text = "Арена: %s\nВыберите бойца и свободный гекс его зоны." % setup.arena_label()
     for unit_id in unit_buttons:
         var raw_cell: Variant = setup.positions.get(unit_id, Vector2i(-1, -1))
         var cell: Vector2i = raw_cell if typeof(raw_cell) == TYPE_VECTOR2I else Vector2i(-1, -1)
@@ -299,6 +319,17 @@ func _on_profile_selected(index: int, unit_id: String) -> void:
 func _on_ai_toggled(enabled: bool) -> void:
     if not _refreshing:
         setup.enemy_ai_enabled = enabled
+
+
+func _on_arena_selected(index: int) -> void:
+    var arena_keys: Array[String] = Arena.keys()
+    if _refreshing or index < 0 or index >= arena_keys.size():
+        return
+    if not setup.set_arena(arena_keys[index]):
+        set_status("Эта арена недоступна для текущего размера поля.")
+        return
+    _status_override = ""
+    _refresh_roster()
 
 
 func _on_defaults_pressed() -> void:

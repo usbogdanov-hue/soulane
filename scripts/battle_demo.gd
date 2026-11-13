@@ -1,5 +1,5 @@
 extends Node2D
-## SULEYN v1.8: attack previews, target explanations, statuses and battle results.
+## SULEYN v1.9: prototype arenas, obstacle-aware routes and attack previews.
 ## attack animation, HP/MP under units and a scrollable combat journal.
 ## Gameplay mathematics remain in battle_combat.gd and damage_calculator.gd.
 
@@ -172,6 +172,8 @@ func _on_preparation_selection(unit_id: String) -> void:
 
 func populate_prepared_team(configuration) -> void:
     board = BattleBoard.new(configuration.columns, configuration.rows)
+    for cell in configuration.blocked_cells():
+        board.set_blocked(cell, true)
     units.clear()
     roster_order.clear()
     for unit_id in configuration.unit_ids():
@@ -302,6 +304,11 @@ func feedback_text() -> String:
     var active: String = turns.active_unit_id()
     var actor = units[active]
     var target_id: String = board.unit_at(hovered_cell)
+    if target_id.is_empty() and board.contains(hovered_cell) and selected_unit_id == active:
+        var movement: Dictionary = movement_preview_for(hovered_cell)
+        var distance_text: String = "Шаги по маршруту: %d · Лимит: %d" % [movement.steps, movement.budget] if movement.steps >= 0 else "Лимит перемещения: %d гекс." % movement.budget
+        var action_hint: String = "ЛКМ — переместиться. Это расходует действие хода." if movement.available else "Выберите другой гекс или действие."
+        return "[b]Маршрут · %s[/b]\n%s\n%s\n%s\nАрена: %s · Крестом отмечены непроходимые гексы." % [unit_label(active), movement.reason, distance_text, action_hint, arena_label()]
     if target_id.is_empty() or not units.has(target_id) or units[target_id].side == actor.side:
         var hint: String = "Выберите активного бойца, затем наведите на врага."
         if is_ai_turn():
@@ -336,6 +343,52 @@ func refresh_feedback() -> void:
     if not is_instance_valid(feedback_ui) or preparing:
         return
     feedback_ui.present(feedback_text(), current_attack_mode(), not battle_over and not is_ai_turn())
+
+
+func arena_label() -> String:
+    if preparing and is_instance_valid(preparation_ui):
+        return preparation_ui.setup.arena_label()
+    return team_setup.arena_label() if encounter_index == TEAM_ENCOUNTER and team_setup != null else "Открытое поле"
+
+
+func movement_preview_for(cell: Vector2i) -> Dictionary:
+    var active: String = turns.active_unit_id() if turns != null else ""
+    var budget: int = units[active].movement if units.has(active) else 0
+    var result: Dictionary = {"available": false, "reason": "", "steps": -1, "budget": budget, "path": []}
+    if preparing:
+        result.reason = "Сначала завершите подготовку боя."
+    elif battle_over:
+        result.reason = "Бой завершён."
+    elif not units.has(active):
+        result.reason = "Нет активного бойца."
+    elif is_ai_turn():
+        result.reason = "Сейчас ходит ИИ. A — ручное управление."
+    elif concussion_skip_pending or units[active].concussion_turns_remaining > 0:
+        result.reason = "Контузия: дождитесь пропуска собственного хода."
+    elif animation_time < ANIMATION_DURATION:
+        result.reason = "Дождитесь окончания анимации."
+    elif selected_unit_id != active:
+        result.reason = "Сначала выберите активного бойца."
+    elif not turns.can_act(active):
+        result.reason = "Действие этого хода уже потрачено."
+    elif not board.contains(cell):
+        result.reason = "Гекс находится за пределами поля."
+    elif board.blocked.has(cell):
+        result.reason = "Гекс закрыт препятствием. Выберите обход."
+    elif cell == board.position_of(active):
+        result.steps = 0
+        result.reason = "Боец уже находится на этом гексе."
+    elif not board.unit_at(cell).is_empty():
+        result.reason = "Гекс занят бойцом. Выберите свободный гекс."
+    else:
+        result.path = board.shortest_path(board.position_of(active), cell, active)
+        if result.path.is_empty():
+            result.reason = "Свободного пути к этому гексу нет."
+        else:
+            result.steps = result.path.size() - 1
+            result.available = result.steps <= budget
+            result.reason = "Маршрут доступен: %d из %d шагов." % [result.steps, budget] if result.available else "До гекса нужно %d шагов, доступно %d. Выберите гекс ближе." % [result.steps, budget]
+    return result
 
 
 func battle_summary() -> Dictionary:
@@ -449,7 +502,8 @@ func reset_demo() -> void:
     message = "Ходит %s. Выберите бойца, затем зелёный гекс или противника." % unit_label(turns.active_unit_id())
     if journal != null:
         journal.clear()
-    log_event("═══ НОВЫЙ БОЙ · v1.8 · СЦЕНАРИЙ %d/%d ═══" % [encounter_index + 1, ENCOUNTER_COUNT], "#ffdc86")
+    log_event("═══ НОВЫЙ БОЙ · v1.9 · СЦЕНАРИЙ %d/%d ═══" % [encounter_index + 1, ENCOUNTER_COUNT], "#ffdc86")
+    log_event("Тестовая арена: %s. Закрытые гексы непроходимы." % arena_label(), "#b3d5e5")
     log_event("Управление: %s. Одно действие: движение, атака или пропуск." % control_description())
     if encounter_index == TEAM_ENCOUNTER:
         log_event("A — переключить ИИ красной команды и ручное управление.", "#ffda87")
@@ -681,6 +735,15 @@ func _process(delta: float) -> void:
     refresh_feedback()
 
 
+func _input(event: InputEvent) -> void:
+    # Keep hover feedback current even when a journal or button consumes motion.
+    if event is InputEventMouseMotion and board != null:
+        var cell: Vector2i = cell_under_cursor()
+        if cell != hovered_cell:
+            hovered_cell = cell
+            queue_redraw()
+
+
 func _unhandled_input(event: InputEvent) -> void:
     if preparing:
         if event is InputEventMouseMotion:
@@ -770,8 +833,9 @@ func click_cell(cell: Vector2i, ai_action: bool = false) -> void:
         else:
             attack_enemy(active, clicked_unit, -1.0, -1.0, -1.0, ai_action)
     elif selected_unit_id == active:
-        if not reachable.has(cell):
-            message = "Гекс недоступен или вне тестового радиуса перемещения."
+        var movement: Dictionary = movement_preview_for(cell)
+        if not movement.available:
+            message = str(movement.reason)
         else:
             if not move_active_unit(active, cell, ai_action):
                 message = "Выберите другой свободный гекс или нажмите Space для пропуска."
@@ -1012,7 +1076,7 @@ func _draw() -> void:
     draw_rect(Rect2(Vector2(879, 98), Vector2(530, 735)), Color(0.12, 0.18, 0.23), true)
     draw_text(Vector2(35, 47), "СУЛЭЙН  /  РАССТАНОВКА" if preparing else "СУЛЭЙН  /  КОМАНДНЫЙ БОЙ", 27, WHITE)
     var encounter_caption: String = "3 НА 3" if encounter_index == TEAM_ENCOUNTER else "ДУЭЛЬ"
-    var heading: String = "v1.8 · СИНИЕ — ДВА ЛЕВЫХ СТОЛБЦА · КРАСНЫЕ — ДВА ПРАВЫХ" if preparing else "v1.8 · %s · ФИКСИРОВАННАЯ ОЧЕРЕДЬ · T — СЦЕНАРИЙ %d/5" % [encounter_caption, encounter_index + 1]
+    var heading: String = "v1.9 · %s · СИНИЕ СЛЕВА, КРАСНЫЕ СПРАВА" % arena_label() if preparing else "v1.9 · %s · %s · T — СЦЕНАРИЙ %d/5" % [encounter_caption, arena_label(), encounter_index + 1]
     draw_text(Vector2(36, 78), heading, 16, MUTED)
 
     for r in range(board.rows):
@@ -1039,6 +1103,10 @@ func _draw() -> void:
             var outline: PackedVector2Array = points.duplicate()
             outline.append(points[0])
             draw_polyline(outline, HEX_EDGE, 1.4, true)
+            if board.blocked.has(cell):
+                draw_circle(center, hex_radius * 0.47, Color(0.12, 0.14, 0.18))
+                draw_line(center + Vector2(-8, -8), center + Vector2(8, 8), MUTED, 3.0, true)
+                draw_line(center + Vector2(-8, 8), center + Vector2(8, -8), MUTED, 3.0, true)
 
     draw_hover_path()
     for unit_id in roster_order:
@@ -1055,12 +1123,17 @@ func _draw() -> void:
 
 
 func draw_hover_path() -> void:
-    if preparing or battle_over or selected_unit_id != turns.active_unit_id() or not reachable.has(hovered_cell):
+    if preparing or battle_over or selected_unit_id != turns.active_unit_id():
         return
-    var path: Array[Vector2i] = board.shortest_path(
-        board.position_of(selected_unit_id), hovered_cell, selected_unit_id)
+    var preview: Dictionary = movement_preview_for(hovered_cell)
+    var path: Array = preview.path
+    if path.size() < 2:
+        return
     for i in range(1, path.size()):
-        draw_line(center_of(path[i - 1]), center_of(path[i]), PATH_COLOR, 4.0, true)
+        draw_line(center_of(path[i - 1]), center_of(path[i]), PATH_COLOR if i <= preview.budget else MUTED.darkened(0.25), 4.0, true)
+    var at: Vector2 = center_of(hovered_cell) + Vector2(-22, -26)
+    draw_rect(Rect2(at, Vector2(48, 21)), BACKGROUND, true)
+    draw_text(at + Vector2(5, 16), "%d/%d" % [preview.steps, preview.budget], 14, PATH_COLOR if preview.available else MUTED)
 
 
 func draw_unit(unit_id: String, fill: Color) -> void:

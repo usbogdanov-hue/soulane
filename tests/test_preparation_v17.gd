@@ -292,7 +292,7 @@ func test_actual_scene_starts_in_preparation() -> void:
     scene.process_mode = Node.PROCESS_MODE_DISABLED
     check(scene.preparing and scene.preparation_ui != null
         and scene.preparation_ui.stage == "roster", "scene ready opens roster instead of starting AI battle")
-    var options: Array[Node] = scene.preparation_ui.find_children("*", "OptionButton", true, false)
+    var options: Array[Node] = scene.preparation_ui.find_children("Profile_*", "OptionButton", true, false)
     check(options.size() == 6, "roster screen exposes six native profile selectors")
     for option in options:
         check(option.item_count == 5, "every slot exposes all five existing profiles")
