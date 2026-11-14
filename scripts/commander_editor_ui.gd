@@ -70,6 +70,8 @@ func configure(unit_label: String, stats, initial_options: Dictionary) -> void:
         var y: float = 165 + index * 51
         _label(controls, key + " · " + POINT_NAMES[key], Vector2(18, y + 4), Vector2(248, 32), 17)
         var spin := _spin(controls, "Points_" + key, Vector2(282, y), Vector2(136, 40), 0, 2994)
+        if key == "WIS":
+            spin.tooltip_text = "WIS повышает магическую защиту (MDEF) и регенерацию MP в конце собственного хода."
         spin.value_changed.connect(_on_points_changed.bind(key))
         point_spins[key] = spin
     remaining_label = _label(controls, "", Vector2(18, 380), Vector2(400, 60), 18, GOLD)
@@ -118,14 +120,14 @@ func _refresh() -> void:
         spin.max_value = maxi(0, maximum)
         spin.set_value_no_signal(int(options[key]))
     remaining_label.text = "Осталось очков: %d\nВсего за уровни: %d" % [unspent, 3 * (int(options.level) - 1)]
-    preview_label.text = "HP %d     MP %d\nSTR %d   AGI %d   WIS %d   INT %d\n\nФизический бонус +%.0f%%\nМагический бонус +%.0f%%\nУклонение %.1f%% · Крит %.1f%% ×%.1f\nPDEF: кол. %.0f%% · руб. %.0f%% · дроб. %.0f%%\nMDEF %.1f%% · %s" % [
+    preview_label.text = "HP %d     MP %d\nSTR %d   AGI %d   WIS %d   INT %d\n\nФиз. урон (STR) +%.0f%%\nМаг. урон (INT) +%.0f%%\nУклонение %.1f%% · Крит %.1f%% ×%.1f\nPDEF: кол. %.0f%% · руб. %.0f%% · дроб. %.0f%%\nMDEF (WIS + броня) %.1f%% · %s" % [
         values.hp, values.mp, stats.STR, stats.AGI, stats.WIS, stats.INT,
         values.physical_bonus, values.magic_bonus, values.evasion, values.crit,
         base_stats.commander.critical_multiplier(), physical.get(0, values.pdef),
         physical.get(1, values.pdef), physical.get(2, values.pdef),
         values.mdef, ARMOR_NAMES[int(options.armor)]]
     _ability_label.text = _ability_text()
-    status_label.text = _notice if not _notice.is_empty() else "За каждый полученный уровень: 3 очка. STR и INT не выше 45.\nОчки можно оставить нераспределёнными. Предпросмотр не меняет текущий бой."
+    status_label.text = _notice if not _notice.is_empty() else "За уровень: 3 очка; STR/INT не выше 45. STR усиливает физический урон, INT — магический.\nWIS повышает магическое сопротивление (MDEF) и регенерацию MP. Очки можно оставить свободными."
     status_label.add_theme_color_override("font_color", MUTED)
     status_label.size = Vector2(984, 63)
     preview_label.size = Vector2(478, 248)

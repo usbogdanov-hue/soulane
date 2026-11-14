@@ -726,7 +726,7 @@ func reset_demo() -> void:
     message = "Ходит %s. Выберите бойца, затем зелёный гекс или противника." % unit_label(turns.active_unit_id())
     if journal != null:
         journal.clear()
-    log_event("═══ НОВЫЙ БОЙ · v1.12 · СЦЕНАРИЙ %d/%d ═══" % [encounter_index + 1, ENCOUNTER_COUNT], "#ffdc86")
+    log_event("═══ НОВЫЙ БОЙ · v1.12.1 · СЦЕНАРИЙ %d/%d ═══" % [encounter_index + 1, ENCOUNTER_COUNT], "#ffdc86")
     log_event("Тестовая арена: %s. Закрытые гексы непроходимы." % arena_label(), "#b3d5e5")
     log_event("Управление: %s. Одно действие: движение, атака или пропуск." % control_description())
     if encounter_index == TEAM_ENCOUNTER:
@@ -1308,7 +1308,7 @@ func _draw() -> void:
     draw_rect(Rect2(Vector2(879, 98), Vector2(530, 735)), Color(0.12, 0.18, 0.23), true)
     draw_text(Vector2(35, 47), "СУЛЭЙН  /  РАССТАНОВКА" if preparing else "СУЛЭЙН  /  КОМАНДНЫЙ БОЙ", 27, WHITE)
     var encounter_caption: String = team_size_caption() if encounter_index == TEAM_ENCOUNTER else "ДУЭЛЬ"
-    var heading: String = "v1.12 · %s · %s · СИНИЕ СЛЕВА, КРАСНЫЕ СПРАВА" % [team_size_caption(), arena_label()] if preparing else "v1.12 · %s · %s · T — СЦЕНАРИЙ %d/5" % [encounter_caption, arena_label(), encounter_index + 1]
+    var heading: String = "v1.12.1 · %s · %s · СИНИЕ СЛЕВА, КРАСНЫЕ СПРАВА" % [team_size_caption(), arena_label()] if preparing else "v1.12.1 · %s · %s · T — СЦЕНАРИЙ %d/5" % [encounter_caption, arena_label(), encounter_index + 1]
     draw_text(Vector2(36, 78), heading, 16, MUTED)
 
     for r in range(board.rows):
