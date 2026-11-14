@@ -287,6 +287,7 @@ func test_invalid_start_preserves_draft() -> void:
 
 func test_actual_scene_starts_in_preparation() -> void:
     var scene = Scene.instantiate()
+    scene.persist_setups = false
     check(scene.start_in_preparation, "main scene opts into v1.7 preparation on launch")
     get_root().add_child(scene)
     scene.process_mode = Node.PROCESS_MODE_DISABLED
@@ -301,6 +302,7 @@ func test_actual_scene_starts_in_preparation() -> void:
 
 func test_native_control_flow() -> void:
     var scene = Scene.instantiate()
+    scene.persist_setups = false
     get_root().add_child(scene)
     scene.process_mode = Node.PROCESS_MODE_DISABLED
     var ui = scene.preparation_ui

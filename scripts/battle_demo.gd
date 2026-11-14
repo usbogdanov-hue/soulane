@@ -1,5 +1,5 @@
 extends Node2D
-## SULEYN v1.9: prototype arenas, obstacle-aware routes and attack previews.
+## SULEYN v1.10: saved setups, portable setup codes and prototype arenas.
 ## attack animation, HP/MP under units and a scrollable combat journal.
 ## Gameplay mathematics remain in battle_combat.gd and damage_calculator.gd.
 
@@ -14,6 +14,9 @@ const PreparationUI = preload("res://scripts/battle_preparation_ui.gd")
 const AttackPreview = preload("res://scripts/attack_preview.gd")
 const FeedbackUI = preload("res://scripts/battle_feedback_ui.gd")
 const ResultsUI = preload("res://scripts/battle_results_ui.gd")
+const SetupCodec = preload("res://scripts/setup_codec.gd")
+const SetupStore = preload("res://scripts/setup_store.gd")
+const SetupLibraryUI = preload("res://scripts/setup_library_ui.gd")
 const Matter = preload("res://scripts/matter_rules.gd")
 const Rules = preload("res://scripts/combat_rules.gd")
 
@@ -51,6 +54,8 @@ const MANA_COLOR = Color(0.48, 0.74, 1.0)
 @export var enemy_stats: SuleynUnitStats = preload("res://data/demo_female_lv25.tres")
 @export var enemy_ai_enabled: bool = true
 @export var start_in_preparation: bool = false
+@export var persist_setups: bool = false
+@export var setup_store_path: String = "user://battle_setups.json"
 ## 0..3 = legacy duels, 4 = team battle. Fixed order is NOT a GDD initiative rule.
 var encounter_index: int = TEAM_ENCOUNTER
 
@@ -75,6 +80,10 @@ var feedback_ui = null
 var results_ui = null
 var results_button: Button
 var results_pending: bool = false
+var setup_store = null
+var library_ui = null
+var storage_ready: bool = false
+var storage_notice: String = ""
 
 var board
 var turns
@@ -119,6 +128,8 @@ func _ready() -> void:
     create_journal()
     create_new_battle_button()
     create_battle_feedback()
+    if persist_setups:
+        initialize_setup_storage(true)
     reset_demo()
     if start_in_preparation:
         open_preparation()
@@ -160,7 +171,10 @@ func open_preparation() -> void:
     preparation_ui.placement_changed.connect(preview_preparation)
     preparation_ui.selection_changed.connect(_on_preparation_selection)
     preparation_ui.battle_requested.connect(start_prepared_battle)
+    preparation_ui.library_requested.connect(open_setup_library)
     add_child(preparation_ui)
+    if not storage_notice.is_empty():
+        preparation_ui.set_status(storage_notice)
     queue_redraw()
 
 
@@ -203,7 +217,7 @@ func preview_preparation() -> void:
 
 
 func start_prepared_battle() -> bool:
-    if not preparing or not is_instance_valid(preparation_ui) or preparation_ui.stage != "deployment":
+    if not preparing or not is_instance_valid(preparation_ui) or preparation_ui.stage != "deployment" or (is_instance_valid(library_ui) and library_ui.visible):
         return false
     if not preparation_ui.setup.is_valid():
         message = "Проверьте состав и расстановку: " + "; ".join(preparation_ui.setup.validation_errors())
@@ -219,7 +233,149 @@ func start_prepared_battle() -> bool:
     if new_battle_button != null:
         new_battle_button.show()
     reset_demo()
+    if persist_setups:
+        if setup_store == null:
+            initialize_setup_storage(false)
+        var saved: Dictionary = setup_store.save_last(team_setup)
+        if not saved.ok:
+            storage_notice = "Последний состав не сохранён: " + str(saved.reason)
+            message = storage_notice
+            log_event(storage_notice, "#ffac96")
+        else:
+            storage_notice = "Восстановлен последний принятый состав."
     return true
+
+
+func initialize_setup_storage(restore_last: bool = false) -> Dictionary:
+    setup_store = SetupStore.new(setup_store_path)
+    var result: Dictionary = setup_store.load_library()
+    storage_ready = bool(result.ok)
+    if not result.ok:
+        storage_notice = str(result.reason)
+        return result
+    storage_notice = str(result.reason) if result.get("recovered", false) else ""
+    if restore_last:
+        var previous = setup_store.last_setup()
+        if previous != null:
+            if previous.columns == demo_columns and previous.rows == demo_rows:
+                team_setup = previous.copy()
+                enemy_ai_enabled = previous.enemy_ai_enabled
+                storage_notice = "Восстановлен последний принятый состав." + (" " + str(result.reason) if result.get("recovered", false) else "")
+            else:
+                storage_notice = "Последний состав рассчитан на другое поле. Выберите сохранённый состав или новый пример."
+    return result
+
+
+func setup_description(configuration) -> String:
+    var lines: PackedStringArray = ["Арена: " + configuration.arena_label()]
+    for side in ["ally", "enemy"]:
+        var names: PackedStringArray = []
+        for slot in range(1, 4):
+            var key: String = configuration.profile_key("%s_%d" % [side, slot])
+            names.append(str(PreparationUI.PROFILE_LABELS.get(key, key)))
+        lines.append(("Синие: " if side == "ally" else "Красные: ") + ", ".join(names))
+    lines.append("Красные: ИИ" if configuration.enemy_ai_enabled else "Обе команды вручную")
+    return "\n".join(lines)
+
+
+func library_slots() -> Array[Dictionary]:
+    var slots: Array[Dictionary] = setup_store.list_slots()
+    for index in range(slots.size()):
+        var stored = setup_store.slot_setup(index)
+        if stored != null:
+            slots[index]["summary"] = stored.arena_label() + (" · ИИ красных" if stored.enemy_ai_enabled else " · Вручную")
+    return slots
+
+
+func open_setup_library() -> void:
+    if not preparing or not is_instance_valid(preparation_ui):
+        return
+    if setup_store == null:
+        initialize_setup_storage(false)
+    if not is_instance_valid(library_ui):
+        library_ui = SetupLibraryUI.new()
+        library_ui.save_requested.connect(save_library_slot)
+        library_ui.load_requested.connect(load_library_slot)
+        library_ui.delete_requested.connect(delete_library_slot)
+        library_ui.export_requested.connect(export_setup_code)
+        library_ui.import_requested.connect(import_setup_code)
+        library_ui.close_requested.connect(close_setup_library)
+        library_ui.z_index = 60
+        add_child(library_ui)
+    library_ui.configure(library_slots(), setup_description(preparation_ui.setup))
+    library_ui.show()
+    if not storage_ready:
+        library_ui.set_status(storage_notice, true)
+
+
+func close_setup_library() -> void:
+    if is_instance_valid(library_ui):
+        library_ui.hide()
+
+
+func save_library_slot(slot: int, title: String) -> void:
+    if not preparing or setup_store == null or not is_instance_valid(library_ui):
+        return
+    var result: Dictionary = setup_store.save_slot(slot, title, preparation_ui.setup)
+    if result.ok:
+        library_ui.refresh_slots(library_slots())
+    library_ui.set_status("Состав сохранён на этом устройстве." if result.ok else str(result.reason), not result.ok)
+
+
+func delete_library_slot(slot: int) -> void:
+    if not preparing or setup_store == null or not is_instance_valid(library_ui):
+        return
+    var result: Dictionary = setup_store.delete_slot(slot)
+    if result.ok:
+        library_ui.refresh_slots(library_slots())
+    library_ui.set_status("Сохранённый состав удалён." if result.ok else str(result.reason), not result.ok)
+
+
+func load_library_slot(slot: int) -> bool:
+    if not preparing or setup_store == null:
+        return false
+    var stored = setup_store.slot_setup(slot)
+    if stored == null:
+        if is_instance_valid(library_ui):
+            library_ui.set_status("В этом слоте пока нет состава.", true)
+        return false
+    return apply_setup_draft(stored, "Сохранённый состав загружен. Проверьте расстановку и начните бой.")
+
+
+func apply_setup_draft(configuration, notice: String) -> bool:
+    if not preparing or not is_instance_valid(preparation_ui):
+        return false
+    if not configuration.is_valid() or configuration.columns != demo_columns or configuration.rows != demo_rows:
+        if is_instance_valid(library_ui):
+            library_ui.set_status("Размер поля состава не совпадает с текущим полем %d×%d." % [demo_columns, demo_rows], true)
+        return false
+    preparation_ui.configure(configuration.copy())
+    preparation_ui.set_status(notice)
+    close_setup_library()
+    queue_redraw()
+    return true
+
+
+func export_setup_code() -> String:
+    if not preparing or not is_instance_valid(preparation_ui):
+        return ""
+    var result: Dictionary = SetupCodec.encode(preparation_ui.setup)
+    if is_instance_valid(library_ui):
+        if result.ok:
+            library_ui.set_code(result.code)
+        library_ui.set_status("Код готов. Скопируйте его для переноса или резервной копии." if result.ok else str(result.reason), not result.ok)
+    return str(result.code) if result.ok else ""
+
+
+func import_setup_code(code: String) -> bool:
+    if not preparing or not is_instance_valid(preparation_ui):
+        return false
+    var result: Dictionary = SetupCodec.decode(code)
+    if not result.ok:
+        if is_instance_valid(library_ui):
+            library_ui.set_status(str(result.reason), true)
+        return false
+    return apply_setup_draft(result.setup, "Состав из кода загружен. Проверьте расстановку и начните бой.")
 
 
 func create_battle_feedback() -> void:
@@ -502,7 +658,7 @@ func reset_demo() -> void:
     message = "Ходит %s. Выберите бойца, затем зелёный гекс или противника." % unit_label(turns.active_unit_id())
     if journal != null:
         journal.clear()
-    log_event("═══ НОВЫЙ БОЙ · v1.9 · СЦЕНАРИЙ %d/%d ═══" % [encounter_index + 1, ENCOUNTER_COUNT], "#ffdc86")
+    log_event("═══ НОВЫЙ БОЙ · v1.10 · СЦЕНАРИЙ %d/%d ═══" % [encounter_index + 1, ENCOUNTER_COUNT], "#ffdc86")
     log_event("Тестовая арена: %s. Закрытые гексы непроходимы." % arena_label(), "#b3d5e5")
     log_event("Управление: %s. Одно действие: движение, атака или пропуск." % control_description())
     if encounter_index == TEAM_ENCOUNTER:
@@ -745,6 +901,10 @@ func _input(event: InputEvent) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+    if is_instance_valid(library_ui) and library_ui.visible:
+        if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
+            close_setup_library()
+        return
     if preparing:
         if event is InputEventMouseMotion:
             hovered_cell = cell_under_cursor()
@@ -1076,7 +1236,7 @@ func _draw() -> void:
     draw_rect(Rect2(Vector2(879, 98), Vector2(530, 735)), Color(0.12, 0.18, 0.23), true)
     draw_text(Vector2(35, 47), "СУЛЭЙН  /  РАССТАНОВКА" if preparing else "СУЛЭЙН  /  КОМАНДНЫЙ БОЙ", 27, WHITE)
     var encounter_caption: String = "3 НА 3" if encounter_index == TEAM_ENCOUNTER else "ДУЭЛЬ"
-    var heading: String = "v1.9 · %s · СИНИЕ СЛЕВА, КРАСНЫЕ СПРАВА" % arena_label() if preparing else "v1.9 · %s · %s · T — СЦЕНАРИЙ %d/5" % [encounter_caption, arena_label(), encounter_index + 1]
+    var heading: String = "v1.10 · %s · СИНИЕ СЛЕВА, КРАСНЫЕ СПРАВА" % arena_label() if preparing else "v1.10 · %s · %s · T — СЦЕНАРИЙ %d/5" % [encounter_caption, arena_label(), encounter_index + 1]
     draw_text(Vector2(36, 78), heading, 16, MUTED)
 
     for r in range(board.rows):

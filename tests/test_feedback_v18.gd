@@ -205,6 +205,7 @@ func test_red_duel_result() -> void:
 
 func test_actual_controls() -> void:
     var demo = Scene.instantiate()
+    demo.persist_setups = false
     root.add_child(demo)
     demo.set_process(false)
     check(demo.preparing and demo.feedback_ui != null and not demo.feedback_ui.visible,
