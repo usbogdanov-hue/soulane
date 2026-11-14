@@ -3,6 +3,7 @@ extends RefCounted
 ## Deployment rules belong to preparation, not combat movement or initiative.
 
 const Arena = preload("res://scripts/battle_arena.gd")
+const CommanderBuild = preload("res://scripts/commander_build.gd")
 
 const PROFILE_KEYS: Array[String] = ["male", "female", "falcon", "hellhound", "lich"]
 const UNIT_IDS: Array[String] = ["ally_1", "enemy_1", "ally_2", "enemy_2", "ally_3", "enemy_3"]
@@ -19,6 +20,7 @@ var rows: int
 var profile_keys: Dictionary = {}
 var positions: Dictionary = {}
 var enabled_slots: Dictionary = {}
+var commander_options: Dictionary = {}
 var enemy_ai_enabled: bool = true
 var arena_key: String = "open"
 
@@ -100,7 +102,32 @@ func profile_key(unit_id: String) -> String:
 
 
 func profile_stats(unit_id: String) -> SuleynUnitStats:
-    return catalog_entry(profile_key(unit_id))
+    var original: SuleynUnitStats = catalog_entry(profile_key(unit_id))
+    if commander_options.has(unit_id):
+        return CommanderBuild.materialize(original, commander_options[unit_id])
+    return original
+
+
+func current_commander_options(unit_id: String) -> Dictionary:
+    if not UNIT_IDS.has(unit_id):
+        return {}
+    if commander_options.has(unit_id):
+        return commander_options[unit_id].duplicate(true) if commander_options[unit_id] is Dictionary else {}
+    return CommanderBuild.defaults(catalog_entry(profile_key(unit_id)))
+
+
+func set_commander_options(unit_id: String, options: Variant) -> bool:
+    if not UNIT_IDS.has(unit_id) or not CommanderBuild.validate(catalog_entry(profile_key(unit_id)), options).ok:
+        return false
+    var accepted: Dictionary = {}
+    for key in CommanderBuild.KEYS:
+        accepted[key] = int(options[key])
+    commander_options[unit_id] = accepted
+    return true
+
+
+func reset_commander_options(unit_id: String) -> void:
+    commander_options.erase(unit_id)
 
 
 static func catalog_entry(key: String) -> SuleynUnitStats:
@@ -117,6 +144,8 @@ func set_profile(unit_id: String, key: String) -> bool:
         return false
     if not is_enabled(unit_id) and not set_enabled(unit_id, true):
         return false
+    if profile_key(unit_id) != key:
+        commander_options.erase(unit_id)
     profile_keys[unit_id] = key
     return true
 
@@ -194,6 +223,7 @@ func reset_positions() -> void:
 
 
 func reset_defaults() -> void:
+    commander_options.clear()
     arena_key = "open"
     enabled_slots.clear()
     for unit_id in UNIT_IDS:
@@ -209,6 +239,11 @@ func reset_defaults() -> void:
 
 func validation_errors() -> PackedStringArray:
     var errors: PackedStringArray = []
+    for unit_id in commander_options:
+        if not UNIT_IDS.has(unit_id):
+            errors.append("Неизвестный слот настроек командира.")
+        elif not CommanderBuild.validate(catalog_entry(profile_key(unit_id)), commander_options[unit_id]).ok:
+            errors.append("Проверьте настройки командира %s." % unit_id)
     if columns < 4 or rows < 3:
         errors.append("Поле подготовки должно быть не меньше 4×3.")
     if not Arena.is_supported(arena_key, columns, rows):
@@ -266,6 +301,7 @@ func copy():
     draft.profile_keys = profile_keys.duplicate(true)
     draft.positions = positions.duplicate(true)
     draft.enabled_slots = enabled_slots.duplicate(true)
+    draft.commander_options = commander_options.duplicate(true)
     draft.enemy_ai_enabled = enemy_ai_enabled
     draft.arena_key = arena_key
     return draft

@@ -56,7 +56,7 @@ func test_sizes_and_roundtrips() -> void:
                 check(board.add_unit(unit_id, setup.positions[unit_id]), "selected fighters can be placed " + tag)
             check(board.unit_positions.size() == blue + red, "no empty units spawned " + tag)
             var encoded: Dictionary = Codec.encode(setup)
-            check(encoded.ok and encoded.data.version == 2 and encoded.data.units.size() == blue + red, "v2 contains selected rows only " + tag)
+            check(encoded.ok and encoded.data.version == Codec.VERSION and encoded.data.units.size() == blue + red, "current format contains selected rows only " + tag)
             var decoded: Dictionary = Codec.decode(encoded.code)
             check(decoded.ok and decoded.setup.unit_ids() == setup.unit_ids(), "partial order round-trips " + tag)
             if decoded.ok:
@@ -146,29 +146,36 @@ func test_corruption() -> void:
     check(not setup.is_valid(), "inactive cached profile cannot bypass allowlist")
 
 
+func legacy_data(setup, version: int) -> Dictionary:
+    var data: Dictionary = Codec.encode(setup).data
+    data.version = version
+    for row in data.units:
+        row.erase("commander")
+    return data
+
+
 func test_legacy_and_versions() -> void:
     var complete = Setup.new()
     complete.set_arena("pillars")
-    var legacy: Dictionary = Codec.encode(complete).data
+    var legacy: Dictionary = legacy_data(complete, 1)
     legacy.version = 1.0
     var decoded: Dictionary = Codec.from_data(legacy)
     check(decoded.ok and decoded.setup.unit_ids() == Setup.UNIT_IDS, "v1 full team still loads with every slot active")
     check(decoded.ok and decoded.setup.arena_key == "pillars", "v1 arena preserved")
-    var partial_data: Dictionary = Codec.encode(sized(1, 2)).data
-    partial_data.version = 1
+    var partial_data: Dictionary = legacy_data(sized(1, 2), 1)
     check(not Codec.from_data(partial_data).ok, "v1 partial wire records cannot be misread as legacy full team")
-    partial_data.version = 3
+    partial_data.version = Codec.VERSION + 1
     check(not Codec.from_data(partial_data).ok, "unknown future version remains rejected")
-    partial_data = Codec.encode(sized(1, 2)).data
+    partial_data = legacy_data(sized(1, 2), 2)
     partial_data.units = partial_data.units.filter(func(row): return row.id.begins_with("enemy_"))
     check(not Codec.from_data(partial_data).ok, "v2 with two red fighters and no blue is rejected")
-    partial_data = Codec.encode(sized(1, 1)).data
+    partial_data = legacy_data(sized(1, 1), 2)
     partial_data.units[1] = partial_data.units[0].duplicate()
     check(not Codec.from_data(partial_data).ok, "duplicate v2 slots rejected")
-    partial_data = Codec.encode(sized(1, 1)).data
+    partial_data = legacy_data(sized(1, 1), 2)
     partial_data.units[1].id = "enemy_4"
     check(not Codec.from_data(partial_data).ok, "unknown v2 slot rejected")
-    partial_data = Codec.encode(sized(1, 1)).data
+    partial_data = legacy_data(sized(1, 1), 2)
     partial_data.units[0].x = -1
     check(not Codec.from_data(partial_data).ok, "active partial coordinates still validated")
 

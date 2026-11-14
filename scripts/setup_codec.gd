@@ -4,11 +4,13 @@ extends RefCounted
 
 const Setup = preload("res://scripts/battle_setup.gd")
 const Arena = preload("res://scripts/battle_arena.gd")
+const Build = preload("res://scripts/commander_build.gd")
 const FORMAT: String = "suleyn.setup"
-const VERSION: int = 2
+const VERSION: int = 3
 const MAX_BYTES: int = 65536
 const TOP_KEYS: Array[String] = ["format", "version", "columns", "rows", "arena", "enemy_ai", "units"]
-const UNIT_KEYS: Array[String] = ["id", "profile", "x", "y"]
+const LEGACY_UNIT_KEYS: Array[String] = ["id", "profile", "x", "y"]
+const UNIT_KEYS: Array[String] = ["id", "profile", "x", "y", "commander"]
 
 
 static func encode(setup) -> Dictionary:
@@ -26,7 +28,8 @@ static func encode(setup) -> Dictionary:
         if not setup.is_enabled(unit_id):
             continue
         var cell: Vector2i = setup.positions[unit_id]
-        units.append({"id": unit_id, "profile": setup.profile_key(unit_id), "x": cell.x, "y": cell.y})
+        units.append({"id": unit_id, "profile": setup.profile_key(unit_id), "x": cell.x, "y": cell.y,
+            "commander": _commander_data(setup.commander_options[unit_id]) if setup.commander_options.has(unit_id) else null})
     var data: Dictionary = {
         "format": FORMAT, "version": VERSION,
         "columns": setup.columns, "rows": setup.rows,
@@ -67,8 +70,10 @@ static func from_data(data: Variant) -> Dictionary:
         return _failure("В старом коде состава должны быть все шесть бойцов.")
     var profiles: Dictionary = {}
     var positions: Dictionary = {}
+    var options: Dictionary = {}
+    var expected_keys: Array[String] = UNIT_KEYS if int(data.version) == VERSION else LEGACY_UNIT_KEYS
     for row in data.units:
-        if not row is Dictionary or not _has_exact_keys(row, UNIT_KEYS):
+        if not row is Dictionary or not _has_exact_keys(row, expected_keys):
             return _failure("Неверные данные бойца в коде состава.")
         if typeof(row.id) != TYPE_STRING or not Setup.UNIT_IDS.has(row.id) or profiles.has(row.id):
             return _failure("В коде есть неизвестный или повторяющийся боец.")
@@ -76,6 +81,11 @@ static func from_data(data: Variant) -> Dictionary:
             return _failure("В коде есть неизвестный профиль бойца.")
         if not _integer_in_range(row.x, 0, columns - 1) or not _integer_in_range(row.y, 0, rows - 1):
             return _failure("Координаты бойца должны быть целыми гексами внутри поля.")
+        if int(data.version) == VERSION and row.commander != null:
+            var checked: Dictionary = Build.validate(Setup.catalog_entry(row.profile), row.commander)
+            if not checked.ok:
+                return _failure("Настройка командира недопустима: " + str(checked.reason))
+            options[row.id] = _commander_data(row.commander)
         profiles[row.id] = row.profile
         positions[row.id] = Vector2i(int(row.x), int(row.y))
     var setup = Setup.new(columns, rows)
@@ -84,6 +94,7 @@ static func from_data(data: Variant) -> Dictionary:
         if profiles.has(unit_id):
             setup.profile_keys[unit_id] = profiles[unit_id]
             setup.positions[unit_id] = positions[unit_id]
+    setup.commander_options = options
     setup.arena_key = data.arena
     setup.enemy_ai_enabled = data.enemy_ai
     if not setup.is_valid():
@@ -96,6 +107,15 @@ static func _integer_in_range(value: Variant, minimum: int, maximum: int) -> boo
         return false
     var number: float = float(value)
     return is_finite(number) and number == floor(number) and number >= minimum and number <= maximum
+
+
+static func _commander_data(options: Dictionary) -> Dictionary:
+    # Validation runs first; canonical integers keep imported JSON floats from
+    # changing the portable code for the same commander configuration.
+    var result: Dictionary = {}
+    for key in options:
+        result[key] = int(options[key])
+    return result
 
 
 static func _has_exact_keys(data: Dictionary, keys: Array[String]) -> bool:

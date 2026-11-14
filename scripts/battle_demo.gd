@@ -1,5 +1,5 @@
 extends Node2D
-## SULEYN v1.11: teams of one to three units, saved setups and prototype arenas.
+## SULEYN v1.12: per-commander level, attribute allocation and armor preparation.
 ## attack animation, HP/MP under units and a scrollable combat journal.
 ## Gameplay mathematics remain in battle_combat.gd and damage_calculator.gd.
 
@@ -17,6 +17,7 @@ const ResultsUI = preload("res://scripts/battle_results_ui.gd")
 const SetupCodec = preload("res://scripts/setup_codec.gd")
 const SetupStore = preload("res://scripts/setup_store.gd")
 const SetupLibraryUI = preload("res://scripts/setup_library_ui.gd")
+const CommanderEditorUI = preload("res://scripts/commander_editor_ui.gd")
 const Matter = preload("res://scripts/matter_rules.gd")
 const Rules = preload("res://scripts/combat_rules.gd")
 
@@ -84,6 +85,9 @@ var setup_store = null
 var library_ui = null
 var storage_ready: bool = false
 var storage_notice: String = ""
+var commander_editor = null
+var editing_commander_id: String = ""
+var editing_profile_key: String = ""
 
 var board
 var turns
@@ -172,6 +176,7 @@ func open_preparation() -> void:
     preparation_ui.selection_changed.connect(_on_preparation_selection)
     preparation_ui.battle_requested.connect(start_prepared_battle)
     preparation_ui.library_requested.connect(open_setup_library)
+    preparation_ui.commander_requested.connect(open_commander_editor)
     add_child(preparation_ui)
     if not storage_notice.is_empty():
         preparation_ui.set_status(storage_notice)
@@ -217,7 +222,7 @@ func preview_preparation() -> void:
 
 
 func start_prepared_battle() -> bool:
-    if not preparing or not is_instance_valid(preparation_ui) or preparation_ui.stage != "deployment" or (is_instance_valid(library_ui) and library_ui.visible):
+    if not preparing or not is_instance_valid(preparation_ui) or preparation_ui.stage != "deployment" or (is_instance_valid(library_ui) and library_ui.visible) or (is_instance_valid(commander_editor) and commander_editor.visible):
         return false
     if not preparation_ui.setup.is_valid():
         message = "Проверьте состав и расстановку: " + "; ".join(preparation_ui.setup.validation_errors())
@@ -275,7 +280,11 @@ func setup_description(configuration) -> String:
             if not configuration.is_enabled(unit_id):
                 continue
             var key: String = configuration.profile_key(unit_id)
-            names.append(str(PreparationUI.PROFILE_LABELS.get(key, key)))
+            var name: String = str(PreparationUI.PROFILE_LABELS.get(key, key))
+            var stats = configuration.profile_stats(unit_id)
+            if stats != null and stats.commander != null:
+                name += " (ур. %d)" % stats.commander.level
+            names.append(name)
         lines.append(("Синие (%d): " if side == "ally" else "Красные (%d): ") % names.size() + (", ".join(names) if not names.is_empty() else "Пусто"))
     lines.append("Красные: ИИ" if configuration.enemy_ai_enabled else "Обе команды вручную")
     return "\n".join(lines)
@@ -292,6 +301,8 @@ func library_slots() -> Array[Dictionary]:
 
 func open_setup_library() -> void:
     if not preparing or not is_instance_valid(preparation_ui):
+        return
+    if is_instance_valid(commander_editor) and commander_editor.visible:
         return
     if setup_store == null:
         initialize_setup_storage(false)
@@ -314,6 +325,51 @@ func open_setup_library() -> void:
 func close_setup_library() -> void:
     if is_instance_valid(library_ui):
         library_ui.hide()
+
+
+func open_commander_editor(unit_id: String) -> void:
+    if not preparing or not is_instance_valid(preparation_ui) or preparation_ui.stage != "roster":
+        return
+    if (is_instance_valid(library_ui) and library_ui.visible) or (is_instance_valid(commander_editor) and commander_editor.visible):
+        return
+    var draft = preparation_ui.setup
+    if not draft.is_enabled(unit_id):
+        return
+    var base_stats = BattleSetup.catalog_entry(draft.profile_key(unit_id))
+    if base_stats == null or base_stats.commander == null:
+        return
+    editing_commander_id = unit_id
+    editing_profile_key = draft.profile_key(unit_id)
+    if not is_instance_valid(commander_editor):
+        commander_editor = CommanderEditorUI.new()
+        commander_editor.applied.connect(apply_commander_options)
+        commander_editor.cancelled.connect(close_commander_editor)
+        commander_editor.z_index = 70
+        add_child(commander_editor)
+    commander_editor.configure("%s · %s" % [unit_token(unit_id), PreparationUI.PROFILE_LABELS.get(editing_profile_key, editing_profile_key)], base_stats, draft.current_commander_options(unit_id))
+    commander_editor.show()
+
+
+func close_commander_editor() -> void:
+    if is_instance_valid(commander_editor):
+        commander_editor.hide()
+    editing_commander_id = ""
+    editing_profile_key = ""
+
+
+func apply_commander_options(options: Dictionary) -> bool:
+    if not preparing or not is_instance_valid(preparation_ui) or not is_instance_valid(commander_editor) or not commander_editor.visible:
+        return false
+    var draft = preparation_ui.setup
+    if not draft.is_enabled(editing_commander_id) or draft.profile_key(editing_commander_id) != editing_profile_key:
+        return false
+    if not draft.set_commander_options(editing_commander_id, options):
+        return false
+    close_commander_editor()
+    preparation_ui.refresh_setup()
+    preparation_ui.set_status("Настройки бойца применены к черновику. Для нового боя нажмите «Далее».")
+    queue_redraw()
+    return true
 
 
 func save_library_slot(slot: int, title: String) -> void:
@@ -670,7 +726,7 @@ func reset_demo() -> void:
     message = "Ходит %s. Выберите бойца, затем зелёный гекс или противника." % unit_label(turns.active_unit_id())
     if journal != null:
         journal.clear()
-    log_event("═══ НОВЫЙ БОЙ · v1.11 · СЦЕНАРИЙ %d/%d ═══" % [encounter_index + 1, ENCOUNTER_COUNT], "#ffdc86")
+    log_event("═══ НОВЫЙ БОЙ · v1.12 · СЦЕНАРИЙ %d/%d ═══" % [encounter_index + 1, ENCOUNTER_COUNT], "#ffdc86")
     log_event("Тестовая арена: %s. Закрытые гексы непроходимы." % arena_label(), "#b3d5e5")
     log_event("Управление: %s. Одно действие: движение, атака или пропуск." % control_description())
     if encounter_index == TEAM_ENCOUNTER:
@@ -913,6 +969,10 @@ func _input(event: InputEvent) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+    if is_instance_valid(commander_editor) and commander_editor.visible:
+        if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
+            close_commander_editor()
+        return
     if is_instance_valid(library_ui) and library_ui.visible:
         if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
             close_setup_library()
@@ -1248,7 +1308,7 @@ func _draw() -> void:
     draw_rect(Rect2(Vector2(879, 98), Vector2(530, 735)), Color(0.12, 0.18, 0.23), true)
     draw_text(Vector2(35, 47), "СУЛЭЙН  /  РАССТАНОВКА" if preparing else "СУЛЭЙН  /  КОМАНДНЫЙ БОЙ", 27, WHITE)
     var encounter_caption: String = team_size_caption() if encounter_index == TEAM_ENCOUNTER else "ДУЭЛЬ"
-    var heading: String = "v1.11 · %s · %s · СИНИЕ СЛЕВА, КРАСНЫЕ СПРАВА" % [team_size_caption(), arena_label()] if preparing else "v1.11 · %s · %s · T — СЦЕНАРИЙ %d/5" % [encounter_caption, arena_label(), encounter_index + 1]
+    var heading: String = "v1.12 · %s · %s · СИНИЕ СЛЕВА, КРАСНЫЕ СПРАВА" % [team_size_caption(), arena_label()] if preparing else "v1.12 · %s · %s · T — СЦЕНАРИЙ %d/5" % [encounter_caption, arena_label(), encounter_index + 1]
     draw_text(Vector2(36, 78), heading, 16, MUTED)
 
     for r in range(board.rows):

@@ -264,6 +264,8 @@ func test_library_roundtrip_and_legacy() -> void:
     var legacy_path: String = path_for("legacy")
     var legacy: Dictionary = Codec.encode(Setup.new()).data
     legacy.version = 1
+    for row in legacy.units:
+        row.erase("commander")
     var legacy_text: String = JSON.stringify({"format": "suleyn.library", "version": 1,
         "last_setup": legacy, "slots": [{"name": "Старая команда", "setup": legacy}, null, null]})
     var file := FileAccess.open(legacy_path, FileAccess.WRITE)

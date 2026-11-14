@@ -2,7 +2,7 @@
 config_version=5
 
 [application]
-config/name="Сулэйн — гибкие составы v1.11 (тест)"
+config/name="Сулэйн — настройка командиров v1.12 (тест)"
 config/use_custom_user_dir=true
 config/custom_user_dir_name="soulane"
 run/main_scene="res://scenes/battle_demo.tscn"
