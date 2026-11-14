@@ -34,7 +34,9 @@ func check(ok: bool, label: String) -> void:
 
 
 func zero_options(level: int = 25, armor: int = 0) -> Dictionary:
-    return {"level": level, "armor": armor, "STR": 0, "AGI": 0, "WIS": 0, "INT": 0}
+    var options: Dictionary = Build.defaults(MALE)
+    options.merge({"level": level, "armor": armor, "STR": 0, "AGI": 0, "WIS": 0, "INT": 0}, true)
+    return options
 
 
 func snapshot(stats) -> Dictionary:
@@ -50,7 +52,7 @@ func test_defaults_and_materialization() -> void:
     for original in [MALE, FEMALE]:
         var before: Dictionary = snapshot(original)
         var defaults: Dictionary = Build.defaults(original)
-        check(defaults.size() == 6 and Build.validate(original, defaults).ok, "catalog commander has a valid complete descriptor")
+        check(defaults.size() == Build.KEYS.size() and Build.validate(original, defaults).ok, "catalog commander has a valid complete descriptor")
         var private_stats = Build.materialize(original, defaults)
         check(private_stats != original and private_stats.commander != original.commander, "materialized unit and commander are private Resources")
         check(snapshot(private_stats) == before, "default materialization exactly preserves original numeric results")
@@ -89,7 +91,7 @@ func test_validation() -> void:
     var extra: Dictionary = Build.defaults(MALE)
     extra["resource"] = "res://data/demo_male_lv25.tres"
     check(not Build.validate(MALE, extra).ok, "unknown field cannot carry a resource override")
-    for key in Build.KEYS:
+    for key in Build.LEGACY_KEYS:
         for invalid in [false, "2", -1, 0.5, NAN, INF]:
             var altered: Dictionary = Build.defaults(MALE)
             altered[key] = invalid

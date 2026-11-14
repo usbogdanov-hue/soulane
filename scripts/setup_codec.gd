@@ -6,7 +6,7 @@ const Setup = preload("res://scripts/battle_setup.gd")
 const Arena = preload("res://scripts/battle_arena.gd")
 const Build = preload("res://scripts/commander_build.gd")
 const FORMAT: String = "suleyn.setup"
-const VERSION: int = 3
+const VERSION: int = 4
 const MAX_BYTES: int = 65536
 const TOP_KEYS: Array[String] = ["format", "version", "columns", "rows", "arena", "enemy_ai", "units"]
 const LEGACY_UNIT_KEYS: Array[String] = ["id", "profile", "x", "y"]
@@ -71,7 +71,8 @@ static func from_data(data: Variant) -> Dictionary:
     var profiles: Dictionary = {}
     var positions: Dictionary = {}
     var options: Dictionary = {}
-    var expected_keys: Array[String] = UNIT_KEYS if int(data.version) == VERSION else LEGACY_UNIT_KEYS
+    var version: int = int(data.version)
+    var expected_keys: Array[String] = UNIT_KEYS if version >= 3 else LEGACY_UNIT_KEYS
     for row in data.units:
         if not row is Dictionary or not _has_exact_keys(row, expected_keys):
             return _failure("Неверные данные бойца в коде состава.")
@@ -81,11 +82,18 @@ static func from_data(data: Variant) -> Dictionary:
             return _failure("В коде есть неизвестный профиль бойца.")
         if not _integer_in_range(row.x, 0, columns - 1) or not _integer_in_range(row.y, 0, rows - 1):
             return _failure("Координаты бойца должны быть целыми гексами внутри поля.")
-        if int(data.version) == VERSION and row.commander != null:
-            var checked: Dictionary = Build.validate(Setup.catalog_entry(row.profile), row.commander)
+        if version >= 3 and row.commander != null:
+            var base_stats: SuleynUnitStats = Setup.catalog_entry(row.profile)
+            var commander: Variant = row.commander
+            if version == 3:
+                var migrated: Dictionary = Build.migrate_v3(base_stats, commander)
+                if not migrated.ok:
+                    return _failure("Настройка командира недопустима: " + str(migrated.reason))
+                commander = migrated.options
+            var checked: Dictionary = Build.validate(base_stats, commander)
             if not checked.ok:
                 return _failure("Настройка командира недопустима: " + str(checked.reason))
-            options[row.id] = _commander_data(row.commander)
+            options[row.id] = _commander_data(commander)
         profiles[row.id] = row.profile
         positions[row.id] = Vector2i(int(row.x), int(row.y))
     var setup = Setup.new(columns, rows)
@@ -112,10 +120,7 @@ static func _integer_in_range(value: Variant, minimum: int, maximum: int) -> boo
 static func _commander_data(options: Dictionary) -> Dictionary:
     # Validation runs first; canonical integers keep imported JSON floats from
     # changing the portable code for the same commander configuration.
-    var result: Dictionary = {}
-    for key in options:
-        result[key] = int(options[key])
-    return result
+    return Build.canonical(options)
 
 
 static func _has_exact_keys(data: Dictionary, keys: Array[String]) -> bool:

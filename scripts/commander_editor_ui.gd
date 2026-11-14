@@ -5,6 +5,7 @@ signal applied(options: Dictionary)
 signal cancelled
 
 const Build = preload("res://scripts/commander_build.gd")
+const Matter = preload("res://scripts/matter_rules.gd")
 const POINT_KEYS: Array[String] = ["STR", "AGI", "WIS", "INT"]
 const POINT_NAMES: Dictionary = {"STR": "Сила", "AGI": "Ловкость", "WIS": "Мудрость", "INT": "Интеллект"}
 const ARMOR_NAMES: Array[String] = ["Без брони", "Лёгкая броня", "Средняя броня", "Тяжёлая броня"]
@@ -24,7 +25,15 @@ var apply_button: Button
 var cancel_button: Button
 var reset_button: Button
 var status_label: Label
+var class_matter_option: OptionButton
+var equipment_checks: Dictionary = {}
+var book_option: OptionButton
+var matter_preview_label: Label
+var tab_buttons: Dictionary = {}
+var tab_views: Dictionary = {}
+var active_tab: String = "stats"
 var _ability_label: Label
+var _book_details_label: Label
 var _refreshing: bool = false
 var _notice: String = ""
 
@@ -37,6 +46,9 @@ func configure(unit_label: String, stats, initial_options: Dictionary) -> void:
         remove_child(child)
         child.free()
     point_spins.clear()
+    equipment_checks.clear()
+    tab_buttons.clear()
+    tab_views.clear()
     position = Vector2.ZERO
     size = Vector2(1440, 900)
     mouse_filter = Control.MOUSE_FILTER_STOP
@@ -49,9 +61,22 @@ func configure(unit_label: String, stats, initial_options: Dictionary) -> void:
     var card := _panel(self, Vector2(200, 70), Vector2(1040, 760), Color(0.085, 0.14, 0.19))
     _label(card, "НАСТРОЙКА КОМАНДИРА · " + unit_label, Vector2(28, 19), Vector2(925, 42), 25, GOLD)
     _button(card, "×", Vector2(966, 20), Vector2(46, 38), _on_cancel_pressed)
-    _label(card, "Настройки применятся после «Начать бой». Умения, материя, пассивная способность\nи движение остаются как в выбранном профиле.", Vector2(28, 70), Vector2(984, 49), 15, MUTED)
+    _label(card, "Настройки применятся после «Начать бой». Пассивная способность и движение сохраняются.", Vector2(28, 70), Vector2(984, 26), 15, MUTED)
+    for key in ["stats", "matter"]:
+        var tab := _button(card, "Характеристики" if key == "stats" else "Материя и книга", Vector2(28 if key == "stats" else 300, 102), Vector2(254, 34), show_tab.bind(key))
+        tab.name = "CommanderTab_" + key
+        tab.toggle_mode = true
+        tab.add_theme_font_size_override("font_size", 16)
+        tab_buttons[key] = tab
+        var view := Control.new()
+        view.name = "CommanderView_" + key
+        view.position = Vector2(0, 146)
+        view.size = Vector2(1040, 450)
+        view.mouse_filter = Control.MOUSE_FILTER_IGNORE
+        card.add_child(view)
+        tab_views[key] = view
 
-    var controls := _panel(card, Vector2(28, 136), Vector2(446, 450), Color(0.11, 0.18, 0.23))
+    var controls := _panel(tab_views.stats, Vector2(28, 0), Vector2(446, 450), Color(0.11, 0.18, 0.23))
     _label(controls, "Уровень", Vector2(18, 17), Vector2(180, 30), 18)
     level_spin = _spin(controls, "CommanderLevel", Vector2(250, 13), Vector2(168, 42), 1, 999)
     level_spin.value_changed.connect(_on_level_changed)
@@ -77,14 +102,15 @@ func configure(unit_label: String, stats, initial_options: Dictionary) -> void:
     remaining_label = _label(controls, "", Vector2(18, 380), Vector2(400, 60), 18, GOLD)
     remaining_label.name = "RemainingPoints"
 
-    var preview := _panel(card, Vector2(498, 136), Vector2(514, 450), Color(0.11, 0.18, 0.23))
+    var preview := _panel(tab_views.stats, Vector2(498, 0), Vector2(514, 450), Color(0.11, 0.18, 0.23))
     _label(preview, "ИТОГОВЫЕ ПАРАМЕТРЫ", Vector2(18, 16), Vector2(478, 28), 17, GOLD)
     preview_label = _label(preview, "", Vector2(18, 54), Vector2(478, 248), 17)
     preview_label.name = "CommanderPreview"
     _ability_label = _label(preview, "", Vector2(18, 310), Vector2(478, 122), 14, MUTED)
     _ability_label.name = "CommanderAbilities"
 
-    status_label = _label(card, "", Vector2(28, 606), Vector2(984, 63), 15, MUTED)
+    _build_matter_view(tab_views.matter)
+    status_label = _label(card, "", Vector2(28, 614), Vector2(984, 63), 15, MUTED)
     status_label.name = "CommanderStatus"
     reset_button = _button(card, "Как в исходном профиле", Vector2(28, 690), Vector2(296, 46), _on_reset_pressed)
     reset_button.name = "ResetCommander"
@@ -92,6 +118,61 @@ func configure(unit_label: String, stats, initial_options: Dictionary) -> void:
     cancel_button.name = "CancelCommander"
     apply_button = _button(card, "Применить к бойцу", Vector2(760, 690), Vector2(252, 46), _on_apply_pressed)
     apply_button.name = "ApplyCommander"
+    show_tab("stats")
+
+
+func _build_matter_view(view: Control) -> void:
+    var controls := _panel(view, Vector2(28, 0), Vector2(446, 450), Color(0.11, 0.18, 0.23))
+    _label(controls, "Материя природы / класса", Vector2(18, 17), Vector2(410, 28), 18, GOLD)
+    class_matter_option = OptionButton.new()
+    class_matter_option.name = "CommanderClassMatter"
+    class_matter_option.position = Vector2(18, 55)
+    for matter in range(Matter.NEUTRAL, Matter.DARK + 1):
+        class_matter_option.add_item(Matter.matter_name(matter))
+    controls.add_child(class_matter_option)
+    class_matter_option.size = Vector2(410, 42)
+    class_matter_option.item_selected.connect(_on_class_matter_selected)
+    _label(controls, "Природа / класс даёт один источник.\nНейтральные источники не учитываются.", Vector2(18, 107), Vector2(410, 46), 14, MUTED)
+    _label(controls, "Тестовые источники материи", Vector2(18, 166), Vector2(410, 28), 17, GOLD)
+    _label(controls, "Предметы здесь задают только материю.", Vector2(18, 199), Vector2(410, 26), 14, MUTED)
+    for index in range(Build.ITEM_KEYS.size()):
+        var key: String = Build.ITEM_KEYS[index]
+        var check := CheckBox.new()
+        check.name = "MatterItem_" + key
+        check.add_theme_font_size_override("font_size", 17)
+        check.text = "%s · %s" % [Build.item_label(key), Matter.matter_name(Build.ITEMS[key].matter)]
+        check.position = Vector2(18, 234 + index * 46)
+        controls.add_child(check)
+        check.size = Vector2(410, 42)
+        check.toggled.connect(_on_equipment_toggled.bind(key))
+        equipment_checks[key] = check
+
+    var preview := _panel(view, Vector2(498, 0), Vector2(514, 450), Color(0.11, 0.18, 0.23))
+    _label(preview, "Книга магии", Vector2(18, 17), Vector2(478, 28), 18, GOLD)
+    book_option = OptionButton.new()
+    book_option.name = "CommanderMagicBook"
+    book_option.position = Vector2(18, 55)
+    for key in Build.BOOK_KEYS:
+        book_option.add_item(Build.book_label(key))
+    preview.add_child(book_option)
+    book_option.size = Vector2(478, 42)
+    book_option.item_selected.connect(_on_book_selected)
+    _book_details_label = _label(preview, "", Vector2(18, 107), Vector2(478, 46), 14, MUTED)
+    _book_details_label.name = "CommanderBookDetails"
+    matter_preview_label = _label(preview, "", Vector2(18, 166), Vector2(478, 200), 16)
+    matter_preview_label.name = "CommanderMatterPreview"
+    _label(preview, "При равенстве ведущих источников — нейтральность.\nКнига не участвует в подсчёте материи бойца.", Vector2(18, 386), Vector2(478, 48), 14, MUTED)
+
+
+func show_tab(key: String) -> void:
+    if not tab_views.has(key):
+        return
+    active_tab = key
+    for tab_key in tab_views:
+        tab_views[tab_key].visible = tab_key == key
+        tab_buttons[tab_key].set_pressed_no_signal(tab_key == key)
+        tab_buttons[tab_key].add_theme_color_override("font_color", GOLD if tab_key == key else TEXT)
+    _notice = ""
     _refresh()
 
 
@@ -101,6 +182,7 @@ func _refresh() -> void:
     apply_button.disabled = not validation.ok
     if not validation.ok:
         preview_label.text = "Проверьте настройки командира."
+        matter_preview_label.text = "Проверьте источники материи и выбранную книгу."
         status_label.text = str(validation.reason)
         status_label.add_theme_color_override("font_color", ERROR)
         _refreshing = false
@@ -110,6 +192,10 @@ func _refresh() -> void:
     var physical: Dictionary = values.get("pdef_by_type", {})
     level_spin.set_value_no_signal(int(options.level))
     armor_option.select(int(options.armor))
+    class_matter_option.select(int(options.class_matter))
+    book_option.select(Build.BOOK_KEYS.find(options.book))
+    for key in equipment_checks:
+        equipment_checks[key].set_pressed_no_signal(options.equipment.has(key))
     var bases: Dictionary = base_stats.commander.base_record()
     var unspent: int = int(values.unspent)
     for key in POINT_KEYS:
@@ -126,15 +212,27 @@ func _refresh() -> void:
         base_stats.commander.critical_multiplier(), physical.get(0, values.pdef),
         physical.get(1, values.pdef), physical.get(2, values.pdef),
         values.mdef, ARMOR_NAMES[int(options.armor)]]
-    _ability_label.text = _ability_text()
-    status_label.text = _notice if not _notice.is_empty() else "За уровень: 3 очка; STR/INT не выше 45. STR усиливает физический урон, INT — магический.\nWIS повышает магическое сопротивление (MDEF) и регенерацию MP. Очки можно оставить свободными."
+    _ability_label.text = _ability_text(values)
+    matter_preview_label.text = "Источники: %s\n\nМатерия бойца / физического удара:\n%s\n\nМатерия магии / книга:\n%s · %s" % [
+        values.source_text, Matter.matter_name(values.body_matter),
+        Matter.matter_name(values.spell_matter), values.book_name]
+    if base_stats.magic_spell != null:
+        _book_details_label.text = "Сила %d · %d MP. Дальность не меняется.\nКнига задаёт только материю магии." % [base_stats.magic_spell.spell_power, base_stats.magic_spell.mana_cost]
+    status_label.text = _notice if not _notice.is_empty() else _default_status()
     status_label.add_theme_color_override("font_color", MUTED)
     status_label.size = Vector2(984, 63)
     preview_label.size = Vector2(478, 248)
+    matter_preview_label.size = Vector2(478, 200)
     _refreshing = false
 
 
-func _ability_text() -> String:
+func _default_status() -> String:
+    if active_tab == "matter":
+        return "Материя бойца определяется большинством источников, материя магии — выбранной книгой.\nСовпадение материй: −15% к атаке; преимущество: −15 п. п. защиты цели. Нейтральность не взаимодействует."
+    return "За уровень: 3 очка; STR/INT не выше 45. STR усиливает физический урон, INT — магический.\nWIS повышает магическое сопротивление (MDEF) и регенерацию MP. Очки можно оставить свободными."
+
+
+func _ability_text(values: Dictionary) -> String:
     var lines: PackedStringArray = []
     var power: int = base_stats.melee_skill.skill_power if base_stats.melee_skill != null else base_stats.attack
     lines.append("1 · Обычный удар · сила %d · 1 гекс." % power)
@@ -142,7 +240,7 @@ func _ability_text() -> String:
         var skill = base_stats.special_skill
         lines.append("2 · %s · %d MP · %d–%d гекс." % [skill.display_name, skill.mana_cost, skill.min_range, skill.max_range])
     if base_stats.magic_spell != null:
-        lines.append("F · %s · %d MP" % [base_stats.magic_spell.display_name, base_stats.magic_spell.mana_cost])
+        lines.append("F · %s · %d MP" % [values.get("spell_name", base_stats.magic_spell.display_name), base_stats.magic_spell.mana_cost])
     lines.append("Движение: %d. Набор умений сохраняется." % base_stats.movement)
     return "\n".join(lines)
 
@@ -176,6 +274,35 @@ func _on_points_changed(value: float, key: String) -> void:
     _refresh()
 
 
+func _on_class_matter_selected(index: int) -> void:
+    if _refreshing or index < Matter.NEUTRAL or index > Matter.DARK:
+        return
+    options.class_matter = index
+    _notice = ""
+    _refresh()
+
+
+func _on_equipment_toggled(enabled: bool, key: String) -> void:
+    if _refreshing or not Build.ITEM_KEYS.has(key):
+        return
+    var selected: Array[String] = []
+    for item in Build.ITEM_KEYS:
+        var included: bool = enabled if item == key else options.equipment.has(item)
+        if included:
+            selected.append(item)
+    options.equipment = selected
+    _notice = ""
+    _refresh()
+
+
+func _on_book_selected(index: int) -> void:
+    if _refreshing or index < 0 or index >= Build.BOOK_KEYS.size():
+        return
+    options.book = Build.BOOK_KEYS[index]
+    _notice = "Книга изменена. Сила, стоимость MP и дальность заклинания сохраняются."
+    _refresh()
+
+
 func _on_reset_pressed() -> void:
     options = Build.defaults(base_stats)
     _notice = "Восстановлены настройки исходного профиля. Нажмите «Применить к бойцу», чтобы принять их."
@@ -198,7 +325,7 @@ func _make_theme() -> Theme:
     var result := Theme.new()
     result.default_font = ThemeDB.fallback_font
     result.default_font_size = 17
-    for type_name in ["Label", "Button", "OptionButton", "PopupMenu", "LineEdit", "SpinBox"]:
+    for type_name in ["Label", "Button", "CheckBox", "OptionButton", "PopupMenu", "LineEdit", "SpinBox"]:
         result.set_color("font_color", type_name, TEXT)
         result.set_color("font_hover_color", type_name, TEXT)
         result.set_color("font_pressed_color", type_name, TEXT)

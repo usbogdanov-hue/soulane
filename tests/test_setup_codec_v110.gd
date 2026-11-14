@@ -120,7 +120,7 @@ func test_schema_and_types() -> void:
         data = base_data()
         data.format = value
         reject(data, "invalid format rejected")
-    for value in [null, "1", true, 0, 4, 1.1, NAN, INF]:
+    for value in [null, "1", true, 0, 5, 1.1, NAN, INF]:
         data = base_data()
         data.version = value
         reject(data, "unsupported or nonintegral version rejected")
