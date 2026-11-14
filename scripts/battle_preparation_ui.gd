@@ -7,6 +7,7 @@ signal placement_changed
 signal selection_changed(unit_id: String)
 signal battle_requested
 signal library_requested
+signal commander_requested(unit_id: String)
 
 const Arena = preload("res://scripts/battle_arena.gd")
 const PROFILE_KEYS: Array[String] = ["male", "female", "falcon", "hellhound", "lich"]
@@ -32,6 +33,7 @@ var arena_option: OptionButton
 var deployment_hint: Label
 var profile_options: Dictionary = {}
 var profile_summaries: Dictionary = {}
+var configure_buttons: Dictionary = {}
 var unit_buttons: Dictionary = {}
 var roster_root: Control
 var deployment_root: Control
@@ -49,6 +51,7 @@ func configure(model) -> void:
         child.free()
     profile_options.clear()
     profile_summaries.clear()
+    configure_buttons.clear()
     unit_buttons.clear()
     mouse_filter = Control.MOUSE_FILTER_IGNORE
     position = Vector2.ZERO
@@ -73,6 +76,15 @@ func show_deployment() -> void:
     roster_root.hide()
     deployment_root.show()
     _refresh_deployment()
+
+
+func refresh_setup() -> void:
+    if setup == null:
+        return
+    if stage == "roster" and is_instance_valid(roster_root):
+        _refresh_roster()
+    elif stage == "deployment" and is_instance_valid(deployment_root):
+        _refresh_deployment()
 
 
 func set_status(text: String) -> void:
@@ -155,14 +167,14 @@ func _panel(parent: Node, at: Vector2, dimensions: Vector2, fill: Color) -> Pane
 func _label(parent: Node, text: String, at: Vector2, dimensions: Vector2,
         font_size: int = 17, color: Color = TEXT) -> Label:
     var label := Label.new()
-    label.text = text
-    label.position = at
-    label.size = dimensions
     label.mouse_filter = Control.MOUSE_FILTER_IGNORE
     label.add_theme_font_size_override("font_size", font_size)
     label.add_theme_color_override("font_color", color)
     label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    label.text = text
+    label.position = at
     parent.add_child(label)
+    label.size = dimensions
     return label
 
 
@@ -203,13 +215,16 @@ func _build_roster() -> void:
             var option := OptionButton.new()
             option.name = "Profile_" + unit_id
             option.position = Vector2(78, y)
-            option.size = Vector2(531, 42)
+            option.size = Vector2(365, 42)
             for key in PROFILE_KEYS:
                 option.add_item(PROFILE_LABELS[key])
             option.add_item("— Пусто —")
             option.item_selected.connect(_on_profile_selected.bind(unit_id))
             panel.add_child(option)
             profile_options[unit_id] = option
+            var configure_button := _button(panel, "Настроить", Vector2(456, y), Vector2(153, 42), _on_commander_requested.bind(unit_id))
+            configure_button.name = "Configure_" + unit_id
+            configure_buttons[unit_id] = configure_button
             profile_summaries[unit_id] = _label(panel, "", Vector2(22, y + 48), Vector2(589, 65), 14, MUTED)
     _label(roster_root, "Арена", Vector2(80, 680), Vector2(90, 32), 18, GOLD)
     arena_option = OptionButton.new()
@@ -268,7 +283,9 @@ func _refresh_roster() -> void:
         var key: String = setup.profile_key(unit_id)
         var active: bool = setup.is_enabled(unit_id)
         profile_options[unit_id].select(PROFILE_KEYS.find(key) if active else PROFILE_KEYS.size())
-        profile_summaries[unit_id].text = _profile_summary(key) if active else "Слот пуст. Выберите бойца или оставьте его свободным."
+        var stats = setup.profile_stats(unit_id)
+        configure_buttons[unit_id].disabled = not active or stats == null or stats.commander == null
+        profile_summaries[unit_id].text = _profile_summary(key, unit_id) if active else "Слот пуст. Выберите бойца или оставьте его свободным."
     var arena_keys: Array[String] = Arena.keys()
     for index in range(arena_keys.size()):
         arena_option.set_item_disabled(index, not Arena.is_supported(arena_keys[index], setup.columns, setup.rows))
@@ -312,8 +329,8 @@ func _repair_selection() -> void:
     selected_unit_id = active_ids[0] if not active_ids.is_empty() else ""
 
 
-func _profile_summary(key: String) -> String:
-    var stats = setup.catalog_entry(key)
+func _profile_summary(key: String, unit_id: String = "") -> String:
+    var stats = setup.profile_stats(unit_id) if not unit_id.is_empty() else setup.catalog_entry(key)
     if stats == null:
         return "Профиль недоступен."
     var hp: int = stats.commander.max_hp() if stats.commander != null else stats.max_hp
@@ -326,7 +343,8 @@ func _profile_summary(key: String) -> String:
         abilities.append("F: %s" % stats.magic_spell.display_name)
     if abilities.is_empty():
         abilities.append("Обычная физическая атака")
-    return "HP %d · MP %d · Движение %d · Сила удара %d\n%s" % [hp, mp, stats.movement, power, " · ".join(abilities)]
+    var level_prefix: String = "Уровень %d · " % stats.commander.level if stats.commander != null else ""
+    return level_prefix + "HP %d · MP %d · Движение %d · Сила удара %d\n%s" % [hp, mp, stats.movement, power, " · ".join(abilities)]
 
 
 func _validation_message() -> String:
@@ -342,6 +360,15 @@ func _on_profile_selected(index: int, unit_id: String) -> void:
         setup.set_profile(unit_id, PROFILE_KEYS[index])
     _status_override = ""
     _refresh_roster()
+
+
+func _on_commander_requested(unit_id: String) -> void:
+    if setup == null or not setup.is_enabled(unit_id):
+        return
+    var stats = setup.profile_stats(unit_id)
+    if stats == null or stats.commander == null:
+        return
+    commander_requested.emit(unit_id)
 
 
 func _on_ai_toggled(enabled: bool) -> void:

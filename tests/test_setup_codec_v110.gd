@@ -120,7 +120,7 @@ func test_schema_and_types() -> void:
         data = base_data()
         data.format = value
         reject(data, "invalid format rejected")
-    for value in [null, "1", true, 0, 3, 1.1, NAN, INF]:
+    for value in [null, "1", true, 0, 4, 1.1, NAN, INF]:
         data = base_data()
         data.version = value
         reject(data, "unsupported or nonintegral version rejected")
@@ -147,6 +147,8 @@ func test_schema_and_types() -> void:
     reject(data, "small arena cannot import obstacles")
     data = base_data()
     data.version = 1.0
+    for row in data.units:
+        row.erase("commander")
     data.columns = 9.0
     data.rows = 7.0
     for row in data.units:
@@ -163,12 +165,14 @@ func test_units_and_positions() -> void:
         reject(data, "units must be six structured records")
     data = base_data()
     data.version = 1
+    for row in data.units:
+        row.erase("commander")
     data.units.pop_back()
     reject(data, "legacy code missing sixth unit rejected")
     data = base_data()
     data.units.append(data.units[0].duplicate())
     reject(data, "seventh unit rejected")
-    for key in ["id", "profile", "x", "y"]:
+    for key in ["id", "profile", "x", "y", "commander"]:
         data = base_data()
         data.units[0].erase(key)
         reject(data, "missing unit field rejected " + key)
