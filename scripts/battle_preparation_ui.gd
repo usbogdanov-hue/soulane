@@ -93,6 +93,10 @@ func handle_board_click(cell: Vector2i) -> void:
         _refresh_deployment()
         selection_changed.emit(selected_unit_id)
         return
+    _repair_selection()
+    if selected_unit_id.is_empty():
+        set_status("Сначала выберите хотя бы одного бойца каждой команды.")
+        return
     if setup.is_blocked(cell):
         set_status("Этот гекс закрыт препятствием. Выберите свободный гекс своей зоны.")
         return
@@ -191,7 +195,7 @@ func _build_roster() -> void:
         var panel := _panel(roster_root, Vector2(x, 172), Vector2(635, 478), Color(0.10, 0.16, 0.21))
         var color: Color = BLUE if side == "blue" else RED
         _label(panel, "СИНЯЯ КОМАНДА" if side == "blue" else "КРАСНАЯ КОМАНДА", Vector2(22, 16), Vector2(590, 34), 23, color)
-        _label(panel, "Выберите трёх бойцов. Одинаковые профили допустимы.", Vector2(22, 53), Vector2(590, 27), 14, MUTED)
+        _label(panel, "Выберите от 1 до 3 бойцов. Лишние слоты оставьте пустыми.", Vector2(22, 53), Vector2(590, 27), 14, MUTED)
         for slot in range(3):
             var unit_id: String = ("ally_" if side == "blue" else "enemy_") + str(slot + 1)
             var y: float = 91.0 + slot * 124.0
@@ -202,6 +206,7 @@ func _build_roster() -> void:
             option.size = Vector2(531, 42)
             for key in PROFILE_KEYS:
                 option.add_item(PROFILE_LABELS[key])
+            option.add_item("— Пусто —")
             option.item_selected.connect(_on_profile_selected.bind(unit_id))
             panel.add_child(option)
             profile_options[unit_id] = option
@@ -240,7 +245,7 @@ func _build_deployment() -> void:
     deployment_hint = _label(panel, "", Vector2(22, 57), Vector2(486, 54), 16, MUTED)
     _label(panel, "СИНИЕ — ДВЕ ЛЕВЫЕ КОЛОНКИ · КРАСНЫЕ — ДВЕ ПРАВЫЕ", Vector2(22, 118), Vector2(486, 29), 12, MUTED)
     var slot: int = 0
-    for unit_id in setup.unit_ids():
+    for unit_id in setup.UNIT_IDS:
         var button := _button(panel, "", Vector2(22, 151 + slot * 62), Vector2(486, 52), _on_unit_selected.bind(unit_id))
         button.name = "Deploy_" + unit_id
         button.toggle_mode = true
@@ -258,29 +263,39 @@ func _build_deployment() -> void:
 
 func _refresh_roster() -> void:
     _refreshing = true
+    _repair_selection()
     for unit_id in profile_options:
         var key: String = setup.profile_key(unit_id)
-        profile_options[unit_id].select(PROFILE_KEYS.find(key))
-        profile_summaries[unit_id].text = _profile_summary(key)
+        var active: bool = setup.is_enabled(unit_id)
+        profile_options[unit_id].select(PROFILE_KEYS.find(key) if active else PROFILE_KEYS.size())
+        profile_summaries[unit_id].text = _profile_summary(key) if active else "Слот пуст. Выберите бойца или оставьте его свободным."
     var arena_keys: Array[String] = Arena.keys()
     for index in range(arena_keys.size()):
         arena_option.set_item_disabled(index, not Arena.is_supported(arena_keys[index], setup.columns, setup.rows))
     arena_option.select(arena_keys.find(setup.arena_key))
     ai_checkbox.set_pressed_no_signal(setup.enemy_ai_enabled)
     next_button.disabled = not setup.is_valid()
-    roster_status_label.text = "Тестовая арена «%s»: %s Закрытые гексы непроходимы." % [setup.arena_label(), setup.arena_description()] if setup.is_valid() else _validation_message()
+    roster_status_label.text = "Составы: %d × %d · Арена: %s\n%s Закрытые гексы непроходимы." % [setup.side_count("blue"), setup.side_count("red"), setup.arena_label(), setup.arena_description()] if setup.is_valid() else _validation_message()
     _refreshing = false
 
 
 func _refresh_deployment() -> void:
-    deployment_hint.text = "Арена: %s\nВыберите бойца и свободный гекс его зоны." % setup.arena_label()
+    _repair_selection()
+    deployment_hint.text = "%d × %d · Арена: %s\nВыберите бойца и свободный гекс его зоны." % [setup.side_count("blue"), setup.side_count("red"), setup.arena_label()]
     for unit_id in unit_buttons:
+        unit_buttons[unit_id].hide()
+    var slot: int = 0
+    for unit_id in setup.unit_ids():
+        var button: Button = unit_buttons[unit_id]
+        button.position = Vector2(22, 151 + slot * 62)
+        button.show()
         var raw_cell: Variant = setup.positions.get(unit_id, Vector2i(-1, -1))
         var cell: Vector2i = raw_cell if typeof(raw_cell) == TYPE_VECTOR2I else Vector2i(-1, -1)
         var key: String = setup.profile_key(unit_id)
-        unit_buttons[unit_id].text = "%s · %s\nГекс %d, %d" % [_token(unit_id), PROFILE_LABELS.get(key, key), cell.x + 1, cell.y + 1]
-        unit_buttons[unit_id].set_pressed_no_signal(unit_id == selected_unit_id)
-        unit_buttons[unit_id].add_theme_color_override("font_color", BLUE if setup.team_for(unit_id) == "blue" else RED)
+        button.text = "%s · %s\nГекс %d, %d" % [_token(unit_id), PROFILE_LABELS.get(key, key), cell.x + 1, cell.y + 1]
+        button.set_pressed_no_signal(unit_id == selected_unit_id)
+        button.add_theme_color_override("font_color", BLUE if setup.team_for(unit_id) == "blue" else RED)
+        slot += 1
     start_button.disabled = not setup.is_valid()
     if not setup.is_valid():
         status_label.text = _validation_message()
@@ -288,6 +303,13 @@ func _refresh_deployment() -> void:
         status_label.text = _status_override
     else:
         status_label.text = "Выбран %s. Для смены бойцов нажмите\n«К составам»." % _token(selected_unit_id)
+
+
+func _repair_selection() -> void:
+    if setup.is_enabled(selected_unit_id):
+        return
+    var active_ids: Array[String] = setup.unit_ids()
+    selected_unit_id = active_ids[0] if not active_ids.is_empty() else ""
 
 
 func _profile_summary(key: String) -> String:
@@ -312,9 +334,13 @@ func _validation_message() -> String:
 
 
 func _on_profile_selected(index: int, unit_id: String) -> void:
-    if _refreshing or index < 0 or index >= PROFILE_KEYS.size():
+    if _refreshing or index < 0 or index > PROFILE_KEYS.size():
         return
-    setup.set_profile(unit_id, PROFILE_KEYS[index])
+    if index == PROFILE_KEYS.size():
+        setup.set_enabled(unit_id, false)
+    else:
+        setup.set_profile(unit_id, PROFILE_KEYS[index])
+    _status_override = ""
     _refresh_roster()
 
 
@@ -351,6 +377,8 @@ func _on_next_pressed() -> void:
 
 
 func _on_unit_selected(unit_id: String) -> void:
+    if not setup.is_enabled(unit_id):
+        return
     selected_unit_id = unit_id
     _status_override = ""
     _refresh_deployment()

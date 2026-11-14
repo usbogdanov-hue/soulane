@@ -296,7 +296,8 @@ func test_actual_scene_starts_in_preparation() -> void:
     var options: Array[Node] = scene.preparation_ui.find_children("Profile_*", "OptionButton", true, false)
     check(options.size() == 6, "roster screen exposes six native profile selectors")
     for option in options:
-        check(option.item_count == 5, "every slot exposes all five existing profiles")
+        check(option.item_count == 6 and option.get_item_text(5) == "— Пусто —",
+            "every slot exposes five existing profiles and the empty choice")
     scene.free()
 
 

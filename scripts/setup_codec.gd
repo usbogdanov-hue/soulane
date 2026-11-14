@@ -5,7 +5,7 @@ extends RefCounted
 const Setup = preload("res://scripts/battle_setup.gd")
 const Arena = preload("res://scripts/battle_arena.gd")
 const FORMAT: String = "suleyn.setup"
-const VERSION: int = 1
+const VERSION: int = 2
 const MAX_BYTES: int = 65536
 const TOP_KEYS: Array[String] = ["format", "version", "columns", "rows", "arena", "enemy_ai", "units"]
 const UNIT_KEYS: Array[String] = ["id", "profile", "x", "y"]
@@ -23,6 +23,8 @@ static func encode(setup) -> Dictionary:
         return failure
     var units: Array[Dictionary] = []
     for unit_id in Setup.UNIT_IDS:
+        if not setup.is_enabled(unit_id):
+            continue
         var cell: Vector2i = setup.positions[unit_id]
         units.append({"id": unit_id, "profile": setup.profile_key(unit_id), "x": cell.x, "y": cell.y})
     var data: Dictionary = {
@@ -49,7 +51,7 @@ static func from_data(data: Variant) -> Dictionary:
         return _failure("Неверная структура кода состава.")
     if typeof(data.format) != TYPE_STRING or data.format != FORMAT:
         return _failure("Этот код не является подготовкой Сулэйна.")
-    if not _integer_in_range(data.version, VERSION, VERSION):
+    if not _integer_in_range(data.version, 1, VERSION):
         return _failure("Версия кода состава не поддерживается.")
     if not _integer_in_range(data.columns, 4, 20) or not _integer_in_range(data.rows, 3, 14):
         return _failure("Размер поля должен быть от 4×3 до 20×14.")
@@ -59,8 +61,10 @@ static func from_data(data: Variant) -> Dictionary:
         return _failure("Арена неизвестна или недоступна для этого размера поля.")
     if typeof(data.enemy_ai) != TYPE_BOOL:
         return _failure("Неверная настройка управления красной командой.")
-    if not data.units is Array or data.units.size() != Setup.UNIT_IDS.size():
-        return _failure("В коде должны быть ровно три бойца каждой команды.")
+    if not data.units is Array or data.units.size() < 2 or data.units.size() > Setup.UNIT_IDS.size():
+        return _failure("В коде нужны от одного до трёх бойцов каждой команды.")
+    if int(data.version) == 1 and data.units.size() != Setup.UNIT_IDS.size():
+        return _failure("В старом коде состава должны быть все шесть бойцов.")
     var profiles: Dictionary = {}
     var positions: Dictionary = {}
     for row in data.units:
@@ -75,12 +79,15 @@ static func from_data(data: Variant) -> Dictionary:
         profiles[row.id] = row.profile
         positions[row.id] = Vector2i(int(row.x), int(row.y))
     var setup = Setup.new(columns, rows)
-    setup.profile_keys = profiles
-    setup.positions = positions
+    for unit_id in Setup.UNIT_IDS:
+        setup.enabled_slots[unit_id] = profiles.has(unit_id)
+        if profiles.has(unit_id):
+            setup.profile_keys[unit_id] = profiles[unit_id]
+            setup.positions[unit_id] = positions[unit_id]
     setup.arena_key = data.arena
     setup.enemy_ai_enabled = data.enemy_ai
     if not setup.is_valid():
-        return _failure("В коде есть занятые гексы или бойцы вне своей зоны расстановки.")
+        return _failure("В каждой команде нужен боец, а выбранные бойцы должны стоять на свободных гексах своей зоны.")
     return {"ok": true, "reason": "", "setup": setup}
 
 
