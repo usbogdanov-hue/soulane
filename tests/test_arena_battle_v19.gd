@@ -57,6 +57,7 @@ func state(demo) -> Dictionary:
 
 func test_preparation_and_replay() -> void:
     var demo = Scene.instantiate()
+    demo.persist_setups = false
     root.add_child(demo)
     demo.set_process(false)
     check(demo.preparing and demo.preparation_ui.setup.arena_key == "open"

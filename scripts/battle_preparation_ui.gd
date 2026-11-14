@@ -6,6 +6,7 @@ signal deployment_requested
 signal placement_changed
 signal selection_changed(unit_id: String)
 signal battle_requested
+signal library_requested
 
 const Arena = preload("res://scripts/battle_arena.gd")
 const PROFILE_KEYS: Array[String] = ["male", "female", "falcon", "hellhound", "lich"]
@@ -223,6 +224,7 @@ func _build_roster() -> void:
     roster_root.add_child(ai_checkbox)
     roster_status_label = _label(roster_root, "", Vector2(80, 718), Vector2(1280, 42), 15, GOLD)
     _button(roster_root, "Вернуть пример 3 × 3", Vector2(80, 765), Vector2(300, 50), _on_defaults_pressed)
+    _button(roster_root, "Сохранённые составы", Vector2(430, 765), Vector2(450, 50), func(): library_requested.emit())
     next_button = _button(roster_root, "Далее: расстановка →", Vector2(1015, 765), Vector2(365, 50), _on_next_pressed)
     next_button.name = "NextDeployment"
     _label(roster_root, "Профили и характеристики взяты из текущего прототипа. Баланс монстров остаётся тестовым.", Vector2(80, 846), Vector2(1280, 30), 14, MUTED)
