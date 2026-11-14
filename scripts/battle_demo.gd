@@ -1,5 +1,5 @@
 extends Node2D
-## SULEYN v1.10: saved setups, portable setup codes and prototype arenas.
+## SULEYN v1.11: teams of one to three units, saved setups and prototype arenas.
 ## attack animation, HP/MP under units and a scrollable combat journal.
 ## Gameplay mathematics remain in battle_combat.gd and damage_calculator.gd.
 
@@ -271,9 +271,12 @@ func setup_description(configuration) -> String:
     for side in ["ally", "enemy"]:
         var names: PackedStringArray = []
         for slot in range(1, 4):
-            var key: String = configuration.profile_key("%s_%d" % [side, slot])
+            var unit_id: String = "%s_%d" % [side, slot]
+            if not configuration.is_enabled(unit_id):
+                continue
+            var key: String = configuration.profile_key(unit_id)
             names.append(str(PreparationUI.PROFILE_LABELS.get(key, key)))
-        lines.append(("Синие: " if side == "ally" else "Красные: ") + ", ".join(names))
+        lines.append(("Синие (%d): " if side == "ally" else "Красные (%d): ") % names.size() + (", ".join(names) if not names.is_empty() else "Пусто"))
     lines.append("Красные: ИИ" if configuration.enemy_ai_enabled else "Обе команды вручную")
     return "\n".join(lines)
 
@@ -283,7 +286,7 @@ func library_slots() -> Array[Dictionary]:
     for index in range(slots.size()):
         var stored = setup_store.slot_setup(index)
         if stored != null:
-            slots[index]["summary"] = stored.arena_label() + (" · ИИ красных" if stored.enemy_ai_enabled else " · Вручную")
+            slots[index]["summary"] = "%d×%d · %s" % [stored.side_count("blue"), stored.side_count("red"), stored.arena_label()] + (" · ИИ красных" if stored.enemy_ai_enabled else " · Вручную")
     return slots
 
 
@@ -507,6 +510,15 @@ func arena_label() -> String:
     return team_setup.arena_label() if encounter_index == TEAM_ENCOUNTER and team_setup != null else "Открытое поле"
 
 
+func team_size_caption() -> String:
+    if preparing and is_instance_valid(preparation_ui):
+        return "%d НА %d" % [preparation_ui.setup.side_count("blue"), preparation_ui.setup.side_count("red")]
+    var counts: Dictionary = {"blue": 0, "red": 0}
+    for unit_id in roster_order:
+        counts[units[unit_id].side] += 1
+    return "%d НА %d" % [counts.blue, counts.red]
+
+
 func movement_preview_for(cell: Vector2i) -> Dictionary:
     var active: String = turns.active_unit_id() if turns != null else ""
     var budget: int = units[active].movement if units.has(active) else 0
@@ -658,7 +670,7 @@ func reset_demo() -> void:
     message = "Ходит %s. Выберите бойца, затем зелёный гекс или противника." % unit_label(turns.active_unit_id())
     if journal != null:
         journal.clear()
-    log_event("═══ НОВЫЙ БОЙ · v1.10 · СЦЕНАРИЙ %d/%d ═══" % [encounter_index + 1, ENCOUNTER_COUNT], "#ffdc86")
+    log_event("═══ НОВЫЙ БОЙ · v1.11 · СЦЕНАРИЙ %d/%d ═══" % [encounter_index + 1, ENCOUNTER_COUNT], "#ffdc86")
     log_event("Тестовая арена: %s. Закрытые гексы непроходимы." % arena_label(), "#b3d5e5")
     log_event("Управление: %s. Одно действие: движение, атака или пропуск." % control_description())
     if encounter_index == TEAM_ENCOUNTER:
@@ -1235,8 +1247,8 @@ func _draw() -> void:
     draw_rect(Rect2(Vector2(28, 98), Vector2(823, 679)), Color(0.10, 0.14, 0.18), true)
     draw_rect(Rect2(Vector2(879, 98), Vector2(530, 735)), Color(0.12, 0.18, 0.23), true)
     draw_text(Vector2(35, 47), "СУЛЭЙН  /  РАССТАНОВКА" if preparing else "СУЛЭЙН  /  КОМАНДНЫЙ БОЙ", 27, WHITE)
-    var encounter_caption: String = "3 НА 3" if encounter_index == TEAM_ENCOUNTER else "ДУЭЛЬ"
-    var heading: String = "v1.10 · %s · СИНИЕ СЛЕВА, КРАСНЫЕ СПРАВА" % arena_label() if preparing else "v1.10 · %s · %s · T — СЦЕНАРИЙ %d/5" % [encounter_caption, arena_label(), encounter_index + 1]
+    var encounter_caption: String = team_size_caption() if encounter_index == TEAM_ENCOUNTER else "ДУЭЛЬ"
+    var heading: String = "v1.11 · %s · %s · СИНИЕ СЛЕВА, КРАСНЫЕ СПРАВА" % [team_size_caption(), arena_label()] if preparing else "v1.11 · %s · %s · T — СЦЕНАРИЙ %d/5" % [encounter_caption, arena_label(), encounter_index + 1]
     draw_text(Vector2(36, 78), heading, 16, MUTED)
 
     for r in range(board.rows):

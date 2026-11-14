@@ -1,5 +1,5 @@
 extends RefCounted
-## Data-only draft for the three-versus-three preparation screen.
+## Data-only draft with up to three enabled fighters per team.
 ## Deployment rules belong to preparation, not combat movement or initiative.
 
 const Arena = preload("res://scripts/battle_arena.gd")
@@ -18,6 +18,7 @@ var columns: int
 var rows: int
 var profile_keys: Dictionary = {}
 var positions: Dictionary = {}
+var enabled_slots: Dictionary = {}
 var enemy_ai_enabled: bool = true
 var arena_key: String = "open"
 
@@ -29,7 +30,60 @@ func _init(width: int = 9, height: int = 7) -> void:
 
 
 func unit_ids() -> Array[String]:
-    return UNIT_IDS.duplicate()
+    # Compact the active slots before interleaving so blue always starts, even
+    # when its first or second UI slot is empty. Full teams retain the old order.
+    var blue: Array[String] = []
+    var red: Array[String] = []
+    for unit_id in UNIT_IDS:
+        if is_enabled(unit_id):
+            if team_for(unit_id) == "blue":
+                blue.append(unit_id)
+            else:
+                red.append(unit_id)
+    var result: Array[String] = []
+    for index in range(maxi(blue.size(), red.size())):
+        if index < blue.size():
+            result.append(blue[index])
+        if index < red.size():
+            result.append(red[index])
+    return result
+
+
+func is_enabled(unit_id: String) -> bool:
+    return UNIT_IDS.has(unit_id) and typeof(enabled_slots.get(unit_id)) == TYPE_BOOL and enabled_slots[unit_id]
+
+
+func side_count(side: String) -> int:
+    var count: int = 0
+    for unit_id in UNIT_IDS:
+        if team_for(unit_id) == side and is_enabled(unit_id):
+            count += 1
+    return count
+
+
+func set_enabled(unit_id: String, enabled: bool) -> bool:
+    if not UNIT_IDS.has(unit_id):
+        return false
+    if enabled and not is_enabled(unit_id):
+        var activation_cell: Variant = _activation_cell(unit_id)
+        if activation_cell == null:
+            return false
+        positions[unit_id] = activation_cell
+    enabled_slots[unit_id] = enabled
+    return true
+
+
+func _activation_cell(unit_id: String) -> Variant:
+    var side: String = team_for(unit_id)
+    var previous: Variant = positions.get(unit_id)
+    if typeof(previous) == TYPE_VECTOR2I and can_deploy(side, previous) and unit_at(previous).is_empty():
+        return previous
+    for row in range(rows):
+        for column in range(columns):
+            var cell := Vector2i(column, row)
+            if can_deploy(side, cell) and unit_at(cell).is_empty():
+                return cell
+    return null
 
 
 func team_for(unit_id: String) -> String:
@@ -61,6 +115,8 @@ static func profile_label(key: String) -> String:
 func set_profile(unit_id: String, key: String) -> bool:
     if not UNIT_IDS.has(unit_id) or not CATALOG.has(key):
         return false
+    if not is_enabled(unit_id) and not set_enabled(unit_id, true):
+        return false
     profile_keys[unit_id] = key
     return true
 
@@ -68,7 +124,7 @@ func set_profile(unit_id: String, key: String) -> bool:
 func unit_at(cell: Vector2i) -> String:
     # Only known slots can represent draft occupants; corrupted extra keys
     # are rejected by validation_errors rather than becoming playable units.
-    for unit_id in UNIT_IDS:
+    for unit_id in unit_ids():
         var location = positions.get(unit_id)
         if typeof(location) == TYPE_VECTOR2I and location == cell:
             return unit_id
@@ -114,14 +170,14 @@ func set_arena(key: String) -> bool:
 
 func place_unit(unit_id: String, cell: Vector2i) -> bool:
     var side: String = team_for(unit_id)
-    if side.is_empty() or not can_deploy(side, cell):
+    if side.is_empty() or not is_enabled(unit_id) or not can_deploy(side, cell):
         return false
     # The chosen slot must exist before a placement can edit it.
     if not positions.has(unit_id):
         return false
     for other_id in positions:
         var location = positions[other_id]
-        if other_id != unit_id and typeof(location) == TYPE_VECTOR2I and location == cell:
+        if other_id != unit_id and typeof(other_id) == TYPE_STRING and is_enabled(other_id) and typeof(location) == TYPE_VECTOR2I and location == cell:
             return false
     positions[unit_id] = cell
     return true
@@ -139,6 +195,9 @@ func reset_positions() -> void:
 
 func reset_defaults() -> void:
     arena_key = "open"
+    enabled_slots.clear()
+    for unit_id in UNIT_IDS:
+        enabled_slots[unit_id] = true
     profile_keys = {
         "ally_1": "male", "enemy_1": "hellhound",
         "ally_2": "female", "enemy_2": "falcon",
@@ -155,9 +214,17 @@ func validation_errors() -> PackedStringArray:
     if not Arena.is_supported(arena_key, columns, rows):
         errors.append("Выберите доступную арену: арены с препятствиями требуют поле не меньше 7×5.")
     if profile_keys.size() != UNIT_IDS.size():
-        errors.append("В составе должны быть ровно три бойца каждой команды.")
+        errors.append("В составе должны быть все шесть доступных слотов.")
     if positions.size() != UNIT_IDS.size():
         errors.append("Для каждого бойца требуется стартовый гекс.")
+    if enabled_slots.size() != UNIT_IDS.size():
+        errors.append("Для каждого слота требуется признак выбора бойца.")
+    for key in enabled_slots:
+        if not UNIT_IDS.has(key):
+            errors.append("Неизвестный слот выбора: %s." % str(key))
+    for side in ["blue", "red"]:
+        if side_count(side) < 1:
+            errors.append("В каждой команде нужен хотя бы один боец.")
     for key in profile_keys:
         if not UNIT_IDS.has(key):
             errors.append("Неизвестный боец в составе: %s." % str(key))
@@ -166,10 +233,14 @@ func validation_errors() -> PackedStringArray:
             errors.append("Неизвестный боец в расстановке: %s." % str(key))
     var occupied: Dictionary = {}
     for unit_id in UNIT_IDS:
+        if not enabled_slots.has(unit_id) or typeof(enabled_slots[unit_id]) != TYPE_BOOL:
+            errors.append("Для %s нужен корректный признак выбора." % unit_id)
         if not profile_keys.has(unit_id) or catalog_entry(profile_key(unit_id)) == null:
             errors.append("Для %s выберите доступного бойца." % unit_id)
         if not positions.has(unit_id) or typeof(positions[unit_id]) != TYPE_VECTOR2I:
             errors.append("Для %s нужен корректный стартовый гекс." % unit_id)
+            continue
+        if not is_enabled(unit_id):
             continue
         var cell: Vector2i = positions[unit_id]
         if is_blocked(cell):
@@ -194,6 +265,7 @@ func copy():
     draft.rows = rows
     draft.profile_keys = profile_keys.duplicate(true)
     draft.positions = positions.duplicate(true)
+    draft.enabled_slots = enabled_slots.duplicate(true)
     draft.enemy_ai_enabled = enemy_ai_enabled
     draft.arena_key = arena_key
     return draft

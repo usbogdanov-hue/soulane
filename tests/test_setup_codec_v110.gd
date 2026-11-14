@@ -120,7 +120,7 @@ func test_schema_and_types() -> void:
         data = base_data()
         data.format = value
         reject(data, "invalid format rejected")
-    for value in [null, "1", true, 0, 2, 1.1, NAN, INF]:
+    for value in [null, "1", true, 0, 3, 1.1, NAN, INF]:
         data = base_data()
         data.version = value
         reject(data, "unsupported or nonintegral version rejected")
@@ -162,8 +162,9 @@ func test_units_and_positions() -> void:
         data.units = value
         reject(data, "units must be six structured records")
     data = base_data()
+    data.version = 1
     data.units.pop_back()
-    reject(data, "missing sixth unit rejected")
+    reject(data, "legacy code missing sixth unit rejected")
     data = base_data()
     data.units.append(data.units[0].duplicate())
     reject(data, "seventh unit rejected")
