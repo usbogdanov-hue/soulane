@@ -10,6 +10,7 @@ signal library_requested
 signal commander_requested(unit_id: String)
 
 const Arena = preload("res://scripts/battle_arena.gd")
+const Matter = preload("res://scripts/matter_rules.gd")
 const PROFILE_KEYS: Array[String] = ["male", "female", "falcon", "hellhound", "lich"]
 const PROFILE_LABELS: Dictionary = {
     "male": "Мужчина · булава", "female": "Женщина · копьё", "falcon": "Сокол",
@@ -344,7 +345,11 @@ func _profile_summary(key: String, unit_id: String = "") -> String:
     if abilities.is_empty():
         abilities.append("Обычная физическая атака")
     var level_prefix: String = "Уровень %d · " % stats.commander.level if stats.commander != null else ""
-    return level_prefix + "HP %d · MP %d · Движение %d · Сила удара %d\n%s" % [hp, mp, stats.movement, power, " · ".join(abilities)]
+    var body_matter: int = stats.commander.resolved_matter() if stats.commander != null else (stats.monster.matter if stats.monster != null else Matter.NEUTRAL)
+    var matter_summary: String = "Материя бойца: " + Matter.matter_name(body_matter)
+    if stats.magic_spell != null and stats.magic_spell.magic_book != null:
+        matter_summary += " · " + stats.magic_spell.magic_book.display_name
+    return level_prefix + "HP %d · MP %d · Движение %d · Сила удара %d\n%s\n%s" % [hp, mp, stats.movement, power, " · ".join(abilities), matter_summary]
 
 
 func _validation_message() -> String:

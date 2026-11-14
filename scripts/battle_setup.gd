@@ -119,10 +119,7 @@ func current_commander_options(unit_id: String) -> Dictionary:
 func set_commander_options(unit_id: String, options: Variant) -> bool:
     if not UNIT_IDS.has(unit_id) or not CommanderBuild.validate(catalog_entry(profile_key(unit_id)), options).ok:
         return false
-    var accepted: Dictionary = {}
-    for key in CommanderBuild.KEYS:
-        accepted[key] = int(options[key])
-    commander_options[unit_id] = accepted
+    commander_options[unit_id] = CommanderBuild.canonical(options)
     return true
 
 

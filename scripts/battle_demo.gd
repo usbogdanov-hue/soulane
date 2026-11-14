@@ -1,5 +1,5 @@
 extends Node2D
-## SULEYN v1.12: per-commander level, attribute allocation and armor preparation.
+## SULEYN v1.13: commander matter sources and independently selected magic books.
 ## attack animation, HP/MP under units and a scrollable combat journal.
 ## Gameplay mathematics remain in battle_combat.gd and damage_calculator.gd.
 
@@ -316,8 +316,11 @@ func open_setup_library() -> void:
         library_ui.close_requested.connect(close_setup_library)
         library_ui.z_index = 60
         add_child(library_ui)
+    # GUI hit testing follows sibling order, including after preparation is rebuilt.
+    move_child(library_ui, get_child_count() - 1)
     library_ui.configure(library_slots(), setup_description(preparation_ui.setup))
     library_ui.show()
+    library_ui.slot_buttons[0].grab_focus()
     if not storage_ready:
         library_ui.set_status(storage_notice, true)
 
@@ -346,8 +349,10 @@ func open_commander_editor(unit_id: String) -> void:
         commander_editor.cancelled.connect(close_commander_editor)
         commander_editor.z_index = 70
         add_child(commander_editor)
+    move_child(commander_editor, get_child_count() - 1)
     commander_editor.configure("%s · %s" % [unit_token(unit_id), PreparationUI.PROFILE_LABELS.get(editing_profile_key, editing_profile_key)], base_stats, draft.current_commander_options(unit_id))
     commander_editor.show()
+    commander_editor.tab_buttons.stats.grab_focus()
 
 
 func close_commander_editor() -> void:
@@ -547,10 +552,15 @@ func feedback_text() -> String:
         return "[b]Цель: %s[/b]\n%s" % [unit_label(target_id), status]
     var critical: String = " · Крит %d HP (%.1f%% при попадании)" % [p.critical_damage, p.crit_chance_pct] if p.crit_chance_pct > 0.0 else " · Без критов"
     var text: String = "[b]%s → %s[/b]\n%s\nУрон при попадании: %d HP%s\nПопадание %.1f%% · В среднем %.1f HP за попытку\nРасход %d MP · Дистанция %d / %d–%d · Защита цели %.1f%%" % [p.name, unit_label(target_id), status, p.normal_damage, critical, p.hit_chance_pct, p.expected_damage, p.cost, p.distance, p.min_range, p.max_range, p.defense_pct]
+    var effect: String = "без взаимодействия"
+    if p.attack_matter != Matter.NEUTRAL and p.defender_matter != Matter.NEUTRAL:
+        if p.attack_matter == p.defender_matter:
+            effect = "−15% к атаке"
+        elif Matter.is_strong_against(p.attack_matter, p.defender_matter):
+            effect = "−15 п.п. защиты цели"
+    text += "\n%s → %s: %s" % [Matter.matter_name(p.attack_matter), Matter.matter_name(p.defender_matter), effect]
     if p.concussion_chance_pct > 0.0:
         text += "\nКонтузия %.0f%% после несмертельного попадания · %d своих пропуска" % [p.concussion_chance_pct, p.concussion_turns]
-    else:
-        text += "\nМатерии: %s → %s · Атака −%.0f%% · Защита −%.0f п.п." % [Matter.matter_name(p.attack_matter), Matter.matter_name(p.defender_matter), p.matter_attack_penalty_pct, p.matter_defense_penalty_pp]
     return text
 
 
@@ -726,7 +736,7 @@ func reset_demo() -> void:
     message = "Ходит %s. Выберите бойца, затем зелёный гекс или противника." % unit_label(turns.active_unit_id())
     if journal != null:
         journal.clear()
-    log_event("═══ НОВЫЙ БОЙ · v1.12.1 · СЦЕНАРИЙ %d/%d ═══" % [encounter_index + 1, ENCOUNTER_COUNT], "#ffdc86")
+    log_event("═══ НОВЫЙ БОЙ · v1.13 · СЦЕНАРИЙ %d/%d ═══" % [encounter_index + 1, ENCOUNTER_COUNT], "#ffdc86")
     log_event("Тестовая арена: %s. Закрытые гексы непроходимы." % arena_label(), "#b3d5e5")
     log_event("Управление: %s. Одно действие: движение, атака или пропуск." % control_description())
     if encounter_index == TEAM_ENCOUNTER:
@@ -1308,7 +1318,7 @@ func _draw() -> void:
     draw_rect(Rect2(Vector2(879, 98), Vector2(530, 735)), Color(0.12, 0.18, 0.23), true)
     draw_text(Vector2(35, 47), "СУЛЭЙН  /  РАССТАНОВКА" if preparing else "СУЛЭЙН  /  КОМАНДНЫЙ БОЙ", 27, WHITE)
     var encounter_caption: String = team_size_caption() if encounter_index == TEAM_ENCOUNTER else "ДУЭЛЬ"
-    var heading: String = "v1.12.1 · %s · %s · СИНИЕ СЛЕВА, КРАСНЫЕ СПРАВА" % [team_size_caption(), arena_label()] if preparing else "v1.12.1 · %s · %s · T — СЦЕНАРИЙ %d/5" % [encounter_caption, arena_label(), encounter_index + 1]
+    var heading: String = "v1.13 · %s · %s · СИНИЕ СЛЕВА, КРАСНЫЕ СПРАВА" % [team_size_caption(), arena_label()] if preparing else "v1.13 · %s · %s · T — СЦЕНАРИЙ %d/5" % [encounter_caption, arena_label(), encounter_index + 1]
     draw_text(Vector2(36, 78), heading, 16, MUTED)
 
     for r in range(board.rows):
@@ -1573,10 +1583,12 @@ func draw_sidebar() -> void:
     if units.has(detail_id):
         draw_commander_row(detail_id, ALLY if units[detail_id].side == "blue" else ENEMY, 371)
     draw_rect(Rect2(Vector2(893, 531), Vector2(503, 294)), Color(0.055, 0.090, 0.13), true)
-    var mode: String = "МАГИЯ" if casting_mode else ("УМЕНИЕ (2)" if special_mode else "ОБЫЧНЫЙ (1)")
-    var controller: String = "красные: ИИ (A)" if encounter_index == TEAM_ENCOUNTER and enemy_ai_enabled else ("ручной бой (A)" if encounter_index == TEAM_ENCOUNTER else "ручной бой")
     var detail_status: String = unit_status(detail_id)
-    draw_text(Vector2(901, 513), detail_status if units.has(detail_id) and units[detail_id].concussion_turns_remaining > 0 else "%s · %s" % [mode, controller], 14, PATH_COLOR)
+    var matter_caption: String = ""
+    if units.has(detail_id):
+        var detail = units[detail_id]
+        matter_caption = "Боец: %s · Магия: %s" % [Matter.matter_name(detail.matter), Matter.matter_name(detail.spell_matter) if detail.spell_power > 0 else "—"]
+    draw_text(Vector2(901, 513), detail_status if units.has(detail_id) and units[detail_id].concussion_turns_remaining > 0 else matter_caption, 14, PATH_COLOR)
     draw_text(Vector2(903, 548), "ЖУРНАЛ БОЯ  /  MP, КРИТЫ, КОНТУЗИЯ", 15, PATH_COLOR)
 
 

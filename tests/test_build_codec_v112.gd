@@ -31,9 +31,15 @@ func configured():
     var setup = Setup.new()
     setup.set_arena("gates")
     setup.enemy_ai_enabled = false
-    setup.set_commander_options("ally_1", {"level": 10, "armor": 0, "STR": 6, "AGI": 4, "WIS": 7, "INT": 3})
-    setup.set_commander_options("ally_2", {"level": 20, "armor": 2, "STR": 10, "AGI": 20, "WIS": 12, "INT": 15})
+    setup.set_commander_options("ally_1", options_for("male", {"level": 10, "armor": 0, "STR": 6, "AGI": 4, "WIS": 7, "INT": 3}))
+    setup.set_commander_options("ally_2", options_for("female", {"level": 20, "armor": 2, "STR": 10, "AGI": 20, "WIS": 12, "INT": 15}))
     return setup
+
+
+func options_for(profile: String, stats: Dictionary) -> Dictionary:
+    var result: Dictionary = Build.defaults(Setup.catalog_entry(profile))
+    result.merge(stats, true)
+    return result
 
 
 func wire() -> Dictionary:
@@ -56,7 +62,7 @@ func legacy(data: Dictionary, version: int) -> Dictionary:
 func test_defaults_and_legacy() -> void:
     var setup = Setup.new()
     var encoded: Dictionary = Codec.encode(setup)
-    check(encoded.ok and encoded.data.version == 3 and encoded.data.units.size() == 6, "v3 is written for default full setup")
+    check(encoded.ok and encoded.data.version == 4 and encoded.data.units.size() == 6, "v4 is written for default full setup")
     for row in encoded.data.units:
         check(row.has("commander") and row.commander == null, "unchanged kit has explicit null configuration")
     for version in [1, 2]:
@@ -77,7 +83,7 @@ func test_defaults_and_legacy() -> void:
     check(old_partial.ok and old_partial.setup.unit_ids() == setup.unit_ids(), "v2 reads partial active slots and their compact order")
     reject(legacy(partial, 1), "v1 continues requiring a full team record")
     var future: Dictionary = partial.duplicate(true)
-    future.version = 4
+    future.version = 5
     reject(future, "future versions remain rejected")
 
 
@@ -106,15 +112,15 @@ func test_configured_roundtrips() -> void:
             check(stats.commander.armor_type == original.commander.armor_type, "chosen armor agrees")
             check(stats.special_skill == original.special_skill and stats.magic_spell == original.magic_spell, "configuration does not replace ability or spell")
         check(copy.profile_stats("ally_2").commander.critical_multiplier() == 2.0, "female critical passive is preserved")
-        check(Codec.encode(copy).code == encoded.code, "v3 code remains canonical after JSON parse")
+        check(Codec.encode(copy).code == encoded.code, "v4 code remains canonical after JSON parse")
         copy.commander_options.ally_1.STR = 0
         check(setup.commander_options.ally_1.STR == 6, "decoded option dictionary does not alias source")
     var highest = Setup.new()
-    check(highest.set_commander_options("ally_1", {"level": 999, "armor": 3, "STR": 35, "AGI": 2000, "WIS": 920, "INT": 39}), "highest level supports full legal allocation")
+    check(highest.set_commander_options("ally_1", options_for("male", {"level": 999, "armor": 3, "STR": 35, "AGI": 2000, "WIS": 920, "INT": 39})), "highest level supports full legal allocation")
     var upper: Dictionary = Codec.decode(Codec.encode(highest).code)
     check(upper.ok and upper.setup.profile_stats("ally_1").commander.level == 999, "upper legal level survives portable code")
     var integral: Dictionary = wire()
-    for key in integral.units[0].commander:
+    for key in ["level", "armor", "STR", "AGI", "WIS", "INT", "class_matter"]:
         integral.units[0].commander[key] = float(integral.units[0].commander[key])
     var floats: Dictionary = Codec.from_data(integral)
     check(floats.ok and Codec.encode(floats.setup).code == Codec.encode(configured()).code, "integral JSON floats normalize to canonical integers")
@@ -123,7 +129,7 @@ func test_configured_roundtrips() -> void:
 func test_schema_and_ranges() -> void:
     var data: Dictionary = wire()
     data.units[0].erase("commander")
-    reject(data, "v3 requires the commander member even for unchanged kits")
+    reject(data, "v4 requires the commander member even for unchanged kits")
     for value in [true, 4, "res://data/male_warrior_lv25.tres", [], {}]:
         data = wire()
         data.units[0].commander = value

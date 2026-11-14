@@ -76,7 +76,9 @@ func snapshot(demo) -> Dictionary:
 
 
 func configured_options() -> Dictionary:
-    return {"level": 10, "armor": 0, "STR": 10, "AGI": 5, "WIS": 5, "INT": 7}
+    var options: Dictionary = Build.defaults(Setup.catalog_entry("male"))
+    options.merge({"level": 10, "armor": 0, "STR": 10, "AGI": 5, "WIS": 5, "INT": 7}, true)
+    return options
 
 
 func apply_options(demo, unit_id: String, options: Dictionary) -> void:
@@ -255,7 +257,8 @@ func test_partial_save_restore_and_female_kit() -> void:
     demo.preparation_ui.setup.set_arena("gates")
     demo.preparation_ui.setup.place_unit("ally_1", Vector2i(0, 0))
     var male: Dictionary = configured_options()
-    var female: Dictionary = {"level": 10, "armor": 2, "STR": 5, "AGI": 10, "WIS": 6, "INT": 6}
+    var female: Dictionary = Build.defaults(Setup.catalog_entry("female"))
+    female.merge({"level": 10, "armor": 2, "STR": 5, "AGI": 10, "WIS": 6, "INT": 6}, true)
     apply_options(demo, "ally_1", male)
     apply_options(demo, "ally_2", female)
     var chosen: String = code_of(demo.preparation_ui.setup)
@@ -339,7 +342,7 @@ func test_legacy_library_migration() -> void:
     var reader = Store.new(path)
     check(reader.load_library().ok
         and reader.last_setup().current_commander_options("ally_1") == configured_options(),
-        "a new v3 last setup is readable after updating a legacy library")
+        "a new last setup is readable after updating a legacy library")
     check(reader.slot_setup(0).commander_options.is_empty()
         and reader.slot_setup(0).profile_stats("ally_1") == Setup.catalog_entry("male")
         and Codec.decode(original_code).ok,
