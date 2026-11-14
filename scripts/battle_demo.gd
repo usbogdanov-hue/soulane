@@ -1,5 +1,5 @@
 extends Node2D
-## SULEYN v1.13: commander matter sources and independently selected magic books.
+## SULEYN v1.14: actual battle statistics and a copyable results report.
 ## attack animation, HP/MP under units and a scrollable combat journal.
 ## Gameplay mathematics remain in battle_combat.gd and damage_calculator.gd.
 
@@ -8,6 +8,7 @@ const BattleBoard = preload("res://scripts/battle_board.gd")
 const BattleTurns = preload("res://scripts/battle_turns.gd")
 const BattleUnit = preload("res://scripts/battle_unit.gd")
 const BattleCombat = preload("res://scripts/battle_combat.gd")
+const BattleStatistics = preload("res://scripts/battle_statistics.gd")
 const BattleAI = preload("res://scripts/battle_ai.gd")
 const BattleSetup = preload("res://scripts/battle_setup.gd")
 const PreparationUI = preload("res://scripts/battle_preparation_ui.gd")
@@ -81,6 +82,7 @@ var feedback_ui = null
 var results_ui = null
 var results_button: Button
 var results_pending: bool = false
+var battle_statistics = BattleStatistics.new()
 var setup_store = null
 var library_ui = null
 var storage_ready: bool = false
@@ -632,8 +634,21 @@ func battle_summary() -> Dictionary:
         var unit = units[unit_id]
         teams[unit.side].total += 1
         teams[unit.side]["alive" if unit.is_alive() else "fallen"] += 1
-        rows.append({"label": unit_label(unit_id), "side": unit.side, "alive": unit.is_alive(), "hp": unit.hp, "max_hp": unit.max_hp})
-    return {"winner_side": winner_side, "rounds": turns.round_number, "teams": teams, "units": rows}
+        rows.append({"id": unit_id, "label": unit_label(unit_id), "side": unit.side,
+            "alive": unit.is_alive(), "hp": unit.hp, "max_hp": unit.max_hp,
+            "mp": unit.mp, "max_mp": unit.max_mp, "level": unit.level,
+            "matter": Matter.matter_name(unit.matter),
+            "spell_matter": Matter.matter_name(unit.spell_matter) if unit.spell_power > 0 else "—"})
+    var setup_code: String = ""
+    if encounter_index == TEAM_ENCOUNTER and team_setup != null:
+        var encoded: Dictionary = SetupCodec.encode(team_setup)
+        if encoded.ok:
+            setup_code = encoded.code
+    var result: Dictionary = {"winner_side": winner_side, "rounds": turns.round_number,
+        "teams": teams, "units": rows, "arena": arena_label(),
+        "statistics": battle_statistics.snapshot(), "setup_code": setup_code}
+    result.report = BattleStatistics.report(result)
+    return result
 
 
 func show_battle_results() -> void:
@@ -646,8 +661,11 @@ func show_battle_results() -> void:
         results_ui.review_requested.connect(review_battle)
         results_ui.z_index = 50
         add_child(results_ui)
+    move_child(results_ui, get_child_count() - 1)
     results_ui.configure(battle_summary())
     results_ui.show()
+    if results_ui.is_inside_tree():
+        results_ui.tab_buttons.overview.grab_focus()
     results_pending = false
     if is_instance_valid(feedback_ui):
         feedback_ui.hide()
@@ -715,6 +733,10 @@ func reset_demo() -> void:
         add_combatant(ALLY_ID, "blue", ally_stats, Vector2i(1, center_row))
         add_combatant(ENEMY_ID, "red", encounter_enemy_stats(), Vector2i(demo_columns - 2, center_row))
     turns = BattleTurns.new(roster_order)
+    var statistics_roster: Array[Dictionary] = []
+    for unit_id in roster_order:
+        statistics_roster.append({"id": unit_id, "label": unit_label(unit_id), "side": units[unit_id].side})
+    battle_statistics.reset(statistics_roster)
     inspected_unit_id = turns.active_unit_id()
     selected_unit_id = ""
     hovered_cell = INVALID_CELL
@@ -736,7 +758,7 @@ func reset_demo() -> void:
     message = "Ходит %s. Выберите бойца, затем зелёный гекс или противника." % unit_label(turns.active_unit_id())
     if journal != null:
         journal.clear()
-    log_event("═══ НОВЫЙ БОЙ · v1.13 · СЦЕНАРИЙ %d/%d ═══" % [encounter_index + 1, ENCOUNTER_COUNT], "#ffdc86")
+    log_event("═══ НОВЫЙ БОЙ · v1.14 · СЦЕНАРИЙ %d/%d ═══" % [encounter_index + 1, ENCOUNTER_COUNT], "#ffdc86")
     log_event("Тестовая арена: %s. Закрытые гексы непроходимы." % arena_label(), "#b3d5e5")
     log_event("Управление: %s. Одно действие: движение, атака или пропуск." % control_description())
     if encounter_index == TEAM_ENCOUNTER:
@@ -862,6 +884,7 @@ func move_active_unit(unit_id: String, cell: Vector2i, ai_action: bool = false) 
     var steps: int = int(distances.get(cell, 0))
     if steps <= 0 or not board.move_unit(unit_id, cell):
         return false
+    battle_statistics.record_move(unit_id, steps)
     var round_before: int = turns.round_number
     turns.spend_action(unit_id)
     var regen: int = end_active_turn(unit_id)
@@ -1112,6 +1135,8 @@ func attack_enemy(attacker_id: String, defender_id: String, dodge_roll: float = 
         log_event("%s: %s" % [unit_label(attacker_id), message], "#ffac96")
         return
 
+    battle_statistics.record_attack(attacker_id, defender_id,
+        "magic" if attack_is_magic else ("special" if attack_is_special else "basic"), result)
     animation_time = 0.0
     animation_attacker = attacker_id
     animation_defender = defender_id
@@ -1153,6 +1178,7 @@ func attack_enemy(attacker_id: String, defender_id: String, dodge_roll: float = 
 
     turns.spend_action(attacker_id)
     var regen: int = attacker.regenerate_mana_end_turn()
+    battle_statistics.record_regeneration(attacker_id, regen)
     if not result["evaded"]:
         var overkill_note: String = " (расчёт %d)" % int(result["calculated_damage"]) if int(result["damage"]) != int(result["calculated_damage"]) else ""
         log_event("  Урон: [b]%d HP[/b]%s. У цели осталось %d/%d HP." % [
@@ -1189,6 +1215,7 @@ func end_active_turn(unit_id: String) -> int:
     if preparing or battle_over or unit_id != turns.active_unit_id() or not units.has(unit_id):
         return 0
     var regenerated: int = units[unit_id].regenerate_mana_end_turn()
+    battle_statistics.record_regeneration(unit_id, regenerated)
     advance_turn(unit_id)
     return regenerated
 
@@ -1236,6 +1263,8 @@ func resolve_one_concussion_skip() -> void:
     var skip_total: int = maxi(1, unit.concussion_total_turns)
     var skip_number: int = skip_total - unit.concussion_turns_remaining
     var regen: int = unit.regenerate_mana_end_turn()
+    battle_statistics.record_concussion_skip(active)
+    battle_statistics.record_regeneration(active, regen)
     concussion_notice_text = "%s: ПРОПУСК %d из %d!" % [unit_label(active), skip_number, skip_total]
     concussion_notice_time = CONCUSSION_NOTICE_SECONDS
     message = "%s пропускает ход %d из %d (контузия). Осталось: %d." % [
@@ -1255,6 +1284,7 @@ func debug_spend_mana() -> void:
     if not can_issue_action(active):
         return
     if units[active].spend_mana(20):
+        battle_statistics.record_test_spend(active, 20)
         message = "%s потратил 20 MP. Регенерация произойдёт в конце хода." % unit_label(active)
         log_event("%s потратил 20 MP (тест). Осталось %d/%d." % [
             unit_label(active), units[active].mp, units[active].max_mp], "#b0cdf5")
@@ -1279,6 +1309,7 @@ func pass_turn(ai_action: bool = false) -> void:
         return
     var round_before: int = turns.round_number
     turns.spend_action(active)
+    battle_statistics.record_pass(active)
     var regen: int = end_active_turn(active)
     clear_selection()
     message = "%s пропустил ход (MP +%d). Теперь ходит %s." % [
@@ -1318,7 +1349,7 @@ func _draw() -> void:
     draw_rect(Rect2(Vector2(879, 98), Vector2(530, 735)), Color(0.12, 0.18, 0.23), true)
     draw_text(Vector2(35, 47), "СУЛЭЙН  /  РАССТАНОВКА" if preparing else "СУЛЭЙН  /  КОМАНДНЫЙ БОЙ", 27, WHITE)
     var encounter_caption: String = team_size_caption() if encounter_index == TEAM_ENCOUNTER else "ДУЭЛЬ"
-    var heading: String = "v1.13 · %s · %s · СИНИЕ СЛЕВА, КРАСНЫЕ СПРАВА" % [team_size_caption(), arena_label()] if preparing else "v1.13 · %s · %s · T — СЦЕНАРИЙ %d/5" % [encounter_caption, arena_label(), encounter_index + 1]
+    var heading: String = "v1.14 · %s · %s · СИНИЕ СЛЕВА, КРАСНЫЕ СПРАВА" % [team_size_caption(), arena_label()] if preparing else "v1.14 · %s · %s · T — СЦЕНАРИЙ %d/5" % [encounter_caption, arena_label(), encounter_index + 1]
     draw_text(Vector2(36, 78), heading, 16, MUTED)
 
     for r in range(board.rows):
