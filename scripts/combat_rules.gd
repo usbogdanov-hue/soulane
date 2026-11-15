@@ -14,11 +14,23 @@ const MAGICAL_UNDEAD: int = 4
 const PERCENT_CAP: float = 90.0
 const EVASION_FLOOR: float = 5.0  # All combat units, commanders and monsters.
 const MONSTER_VULNERABILITY: float = 15.0
+const STAT_DAMAGE_BONUS_PER_POINT: float = 1.0
+const WIS_MDEF_PER_POINT: float = 1.0
 
 
 static func cap_percent(value: float) -> float:
     # Negative armor/resistance remains valid and increases incoming damage.
     return minf(PERCENT_CAP, value)
+
+
+static func stat_damage_bonus(stat_value: float) -> float:
+    # STR and INT themselves are uncapped; their damage bonus stops at +90%.
+    return clampf(stat_value * STAT_DAMAGE_BONUS_PER_POINT, 0.0, PERCENT_CAP)
+
+
+static func wis_mdef_bonus(wis: float) -> float:
+    # Raw WIS contribution; cap the final defense after armor/effects/matter.
+    return maxf(0.0, wis) * WIS_MDEF_PER_POINT
 
 
 static func cap_chance(value: float, guaranteed: bool = false) -> float:

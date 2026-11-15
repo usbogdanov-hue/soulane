@@ -11,6 +11,7 @@ var failures: int = 0
 func _initialize() -> void:
     test_six_editable_resources()
     test_resource_edits_update_commander()
+    test_large_base_attributes()
     if failures == 0:
         print("SULEYN v0.6: %d base resource checks passed." % checks)
         quit(0)
@@ -41,6 +42,7 @@ func test_six_editable_resources() -> void:
         var resource = Profile.BASES[i]
         check(resource.get_script() == BaseStats, "archetype %d loaded from custom resource" % i)
         var p = Profile.new()
+        p.auto_allocate = false
         p.archetype = i
         var base: Dictionary = p.base_record()
         check(base["name"] == item[0], "archetype %d: name" % i)
@@ -53,6 +55,7 @@ func test_six_editable_resources() -> void:
 
 func test_resource_edits_update_commander() -> void:
     var p = Profile.new()
+    p.auto_allocate = false
     p.archetype = 1
     p.level = 10
     p.points_str = 5
@@ -70,3 +73,17 @@ func test_resource_edits_update_commander() -> void:
     resource.base_hp = old_hp
     check(p.primary_stats()["STR"] == 13 and p.max_hp() == 445,
         "restored defaults match GDD values")
+
+
+func test_large_base_attributes() -> void:
+    var p = Profile.new()
+    p.auto_allocate = false
+    p.base_stats = Profile.BASES[0].duplicate()
+    p.base_stats.base_str = 60
+    p.base_stats.base_int = 100
+    check(p.primary_stats()["STR"] == 60 and p.primary_stats()["INT"] == 100,
+        "editable base STR and INT are no longer capped at forty-five")
+    check(p.get("physical_damage_bonus_percent") == 60.0 and p.get("magic_power_percent") == 90.0,
+        "uncapped base stats grant one-percent bonuses capped at ninety percent")
+    check(p.max_hp() == 900 and p.max_mp() == 550,
+        "large base stats retain full HP and MP contributions beyond the damage bonus cap")

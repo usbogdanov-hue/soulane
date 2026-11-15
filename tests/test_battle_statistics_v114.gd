@@ -195,7 +195,7 @@ func test_scene_and_results() -> void:
     demo.preview_preparation()
     check(demo.battle_statistics.snapshot() == snapshot, "P and deployment preview do not reset recorded battle statistics")
     var code: Dictionary = Codec.encode(demo.team_setup).data
-    check(code.version == 4 and not str(code).contains("statistics"), "portable setup schema remains v4 without runtime counters")
+    check(code.version == 5 and not str(code).contains("statistics"), "portable setup schema remains v5 without runtime counters")
     demo.preparation_ui.next_button.pressed.emit()
     demo.preparation_ui.start_button.pressed.emit()
     check(demo.battle_statistics.snapshot().totals.passes == 0, "new accepted battle clears prior events")

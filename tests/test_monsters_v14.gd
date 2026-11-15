@@ -76,8 +76,8 @@ func run_tests() -> void:
     var physical = Combat.melee_attack(map, combatants, "man", "l", 99.0, 99.0)
     check(bool(physical.get("ok", false)) and not bool(physical.get("evaded", true)),
         "normal hit against undead")
-    check(int(physical.get("calculated_damage", -1)) == 200,
-        "190 attack into -5 percent PDEF rounds to 200")
+    check(int(physical.get("calculated_damage", -1)) == 153,
+        "146 attack into -5 percent PDEF rounds to 153")
     check(not bool(physical.get("critical", true)), "non-critical hit is still possible")
 
     # Monster magic uses book's matter and no critical/evasion even when high crit exists.

@@ -5,6 +5,7 @@ signal applied(options: Dictionary)
 signal cancelled
 
 const Build = preload("res://scripts/commander_build.gd")
+const Growth = preload("res://scripts/commander_growth.gd")
 const Matter = preload("res://scripts/matter_rules.gd")
 const POINT_KEYS: Array[String] = ["STR", "AGI", "WIS", "INT"]
 const POINT_NAMES: Dictionary = {"STR": "Сила", "AGI": "Ловкость", "WIS": "Мудрость", "INT": "Интеллект"}
@@ -89,17 +90,28 @@ func configure(unit_label: String, stats, initial_options: Dictionary) -> void:
     controls.add_child(armor_option)
     armor_option.size = Vector2(218, 42)
     armor_option.item_selected.connect(_on_armor_selected)
-    _label(controls, "ОЧКИ ЗА УРОВНИ", Vector2(18, 126), Vector2(400, 27), 16, MUTED)
+    _label(controls, "АВТОМАТИЧЕСКИЙ РОСТ", Vector2(18, 126), Vector2(400, 27), 16, MUTED)
+    var weights: Dictionary = Growth.weights(base_stats.commander.archetype)
     for index in range(POINT_KEYS.size()):
         var key: String = POINT_KEYS[index]
         var y: float = 165 + index * 51
-        _label(controls, key + " · " + POINT_NAMES[key], Vector2(18, y + 4), Vector2(248, 32), 17)
+        _label(controls, "%s · %s · %d%%" % [key, POINT_NAMES[key], weights.get(key, 0)], Vector2(18, y + 4), Vector2(248, 32), 17)
         var spin := _spin(controls, "Points_" + key, Vector2(282, y), Vector2(136, 40), 0, 2994)
+        spin.editable = false
+        spin.focus_mode = Control.FOCUS_NONE
+        spin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+        spin.get_line_edit().focus_mode = Control.FOCUS_NONE
+        spin.get_line_edit().mouse_filter = Control.MOUSE_FILTER_IGNORE
+        spin.get_line_edit().add_theme_color_override("font_uneditable_color", TEXT)
+        spin.tooltip_text = "Очки за уровни распределяются автоматически: %d%% в %s." % [weights.get(key, 0), key]
         if key == "WIS":
-            spin.tooltip_text = "WIS повышает магическую защиту (MDEF) и регенерацию MP в конце собственного хода."
-        spin.value_changed.connect(_on_points_changed.bind(key))
+            spin.tooltip_text += " WIS даёт +1 п.п. магической защиты (MDEF) за очко и регенерацию MP в конце собственного хода."
+        elif key == "STR":
+            spin.tooltip_text += " STR даёт +1% физического урона за очко, бонус до +90%."
+        elif key == "INT":
+            spin.tooltip_text += " INT даёт +1% магического урона за очко, бонус до +90%."
         point_spins[key] = spin
-    remaining_label = _label(controls, "", Vector2(18, 380), Vector2(400, 60), 18, GOLD)
+    remaining_label = _label(controls, "", Vector2(18, 380), Vector2(400, 60), 16, GOLD)
     remaining_label.name = "RemainingPoints"
 
     var preview := _panel(tab_views.stats, Vector2(498, 0), Vector2(514, 450), Color(0.11, 0.18, 0.23))
@@ -196,16 +208,14 @@ func _refresh() -> void:
     book_option.select(Build.BOOK_KEYS.find(options.book))
     for key in equipment_checks:
         equipment_checks[key].set_pressed_no_signal(options.equipment.has(key))
-    var bases: Dictionary = base_stats.commander.base_record()
-    var unspent: int = int(values.unspent)
+    var budget: int = 3 * (int(options.level) - 1)
+    var distributed: int = 0
     for key in POINT_KEYS:
         var spin: SpinBox = point_spins[key]
-        var maximum: int = int(options[key]) + unspent
-        if key == "STR" or key == "INT":
-            maximum = mini(maximum, 45 - int(bases[key.to_lower()]))
-        spin.max_value = maxi(0, maximum)
+        spin.max_value = budget
         spin.set_value_no_signal(int(options[key]))
-    remaining_label.text = "Осталось очков: %d\nВсего за уровни: %d" % [unspent, 3 * (int(options.level) - 1)]
+        distributed += int(options[key])
+    remaining_label.text = "Распределено: %d из %d\nПо 3 очка за полученный уровень" % [distributed, budget]
     preview_label.text = "HP %d     MP %d\nSTR %d   AGI %d   WIS %d   INT %d\n\nФиз. урон (STR) +%.0f%%\nМаг. урон (INT) +%.0f%%\nУклонение %.1f%% · Крит %.1f%% ×%.1f\nPDEF: кол. %.0f%% · руб. %.0f%% · дроб. %.0f%%\nMDEF (WIS + броня) %.1f%% · %s" % [
         values.hp, values.mp, stats.STR, stats.AGI, stats.WIS, stats.INT,
         values.physical_bonus, values.magic_bonus, values.evasion, values.crit,
@@ -229,7 +239,7 @@ func _refresh() -> void:
 func _default_status() -> String:
     if active_tab == "matter":
         return "Материя бойца определяется большинством источников, материя магии — выбранной книгой.\nСовпадение материй: −15% к атаке; преимущество: −15 п. п. защиты цели. Нейтральность не взаимодействует."
-    return "За уровень: 3 очка; STR/INT не выше 45. STR усиливает физический урон, INT — магический.\nWIS повышает магическое сопротивление (MDEF) и регенерацию MP. Очки можно оставить свободными."
+    return "3 очка за уровень распределяются автоматически по долям класса; дробные доли — по одному очку.\nSTR: +1% физ. урона; INT: +1% маг. урона; бонусы до +90%. WIS: +1 п.п. MDEF за очко и регенерация MP."
 
 
 func _ability_text(values: Dictionary) -> String:
@@ -248,13 +258,8 @@ func _ability_text(values: Dictionary) -> String:
 func _on_level_changed(value: float) -> void:
     if _refreshing:
         return
-    var old: Dictionary = options.duplicate(true)
     options = Build.resize(base_stats, options, int(value))
-    var trimmed: bool = false
-    for key in POINT_KEYS:
-        if int(options.get(key, 0)) < int(old.get(key, 0)):
-            trimmed = true
-    _notice = "Часть очков снята по новому бюджету. Приоритет сохранения: STR → AGI → WIS → INT." if trimmed else "Уровень изменён. Распределите оставшиеся очки."
+    _notice = "Уровень изменён. Очки автоматически перераспределены по долям класса."
     _refresh()
 
 
@@ -266,11 +271,11 @@ func _on_armor_selected(index: int) -> void:
     _refresh()
 
 
-func _on_points_changed(value: float, key: String) -> void:
+func _on_points_changed(_value: float, key: String) -> void:
     if _refreshing or not POINT_KEYS.has(key):
         return
-    options[key] = int(value)
-    _notice = ""
+    # Compatibility entry point: point controls no longer edit the draft.
+    _notice = "Очки распределяются автоматически при выборе уровня."
     _refresh()
 
 

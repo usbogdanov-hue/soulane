@@ -13,7 +13,7 @@ var failures: int = 0
 
 func _initialize() -> void:
     test_v3_migration()
-    test_v4_roundtrips()
+    test_current_roundtrips()
     test_strict_versions_and_loadouts()
     test_purity_and_transaction()
     if failures == 0:
@@ -32,8 +32,12 @@ func check(ok: bool, label: String) -> void:
 
 
 func options_for(profile: String, changes: Dictionary) -> Dictionary:
-    var result: Dictionary = Build.defaults(Setup.catalog_entry(profile))
-    result.merge(changes, true)
+    var base = Setup.catalog_entry(profile)
+    var defaults: Dictionary = Build.defaults(base)
+    var result: Dictionary = Build.resize(base, defaults, int(changes.get("level", defaults.level)))
+    for key in changes:
+        if key != "level" and not Build.ATTRIBUTES.has(key):
+            result[key] = changes[key]
     return result
 
 
@@ -61,6 +65,11 @@ func v3_data(data: Dictionary) -> Dictionary:
         if row.commander is Dictionary:
             for key in NEW_KEYS:
                 row.commander.erase(key)
+            # Genuine historical manual allocations, deliberately different
+            # from today's automatic values for the same levels.
+            var manual: Dictionary = {"STR": 6, "AGI": 4, "WIS": 7, "INT": 3} if row.profile == "male" else {"STR": 10, "AGI": 20, "WIS": 12, "INT": 15}
+            for key in manual:
+                row.commander[key] = manual[key]
     return result
 
 
@@ -89,8 +98,10 @@ func test_v3_migration() -> void:
             var options: Dictionary = copy.commander_options[id]
             var old: Dictionary = setup.commander_options[id]
             check(options.size() == 9, "v3 commander gains exactly the new fields " + id)
-            for key in LEGACY_KEYS:
-                check(options[key] == old[key], "v3 scalar is preserved " + id + " " + key)
+            for key in ["level", "armor"]:
+                check(options[key] == old[key], "v3 chosen scalar is preserved " + id + " " + key)
+            for key in Build.ATTRIBUTES:
+                check(options[key] == old[key], "v3 manual points migrate to automatic allocation " + id + " " + key)
             check(options.class_matter == Matter.NEUTRAL and options.equipment.is_empty(),
                 "v3 restores existing neutral class and empty equipment " + id)
             check(options.book == ("fire" if id == "ally_1" else "dark"), "v3 restores original profile book " + id)
@@ -98,13 +109,13 @@ func test_v3_migration() -> void:
             var stats = copy.profile_stats(id)
             check(stats.magic_spell == base.magic_spell and stats.special_skill == base.special_skill,
                 "legacy spells and abilities retain resource identity " + id)
-            var expected: Dictionary = {"STR": 16, "AGI": 12, "WIS": 11, "INT": 9} if id == "ally_1" else {"STR": 18, "AGI": 30, "WIS": 18, "INT": 19}
-            check(stats.commander.primary_stats() == expected, "v3 final attributes do not lose allocations " + id)
-            check(stats.commander.max_hp() == (505 if id == "ally_1" else 545)
-                and stats.commander.max_mp() == (113 if id == "ally_1" else 188), "v3 health and mana are preserved " + id)
+            var expected: Dictionary = {"STR": 23, "AGI": 16, "WIS": 7, "INT": 9} if id == "ally_1" else {"STR": 25, "AGI": 33, "WIS": 17, "INT": 10}
+            check(stats.commander.primary_stats() == expected, "v3 final attributes use the approved automatic growth " + id)
+            check(stats.commander.max_hp() == (575 if id == "ally_1" else 615)
+                and stats.commander.max_mp() == (113 if id == "ally_1" else 143), "v3 health and mana are recomputed from automatic attributes " + id)
         var rewritten: Dictionary = Codec.encode(copy)
-        check(rewritten.ok and rewritten.data.version == 4, "legacy record rewrites as v4")
-        check(Codec.encode(Codec.decode(rewritten.code).setup).code == rewritten.code, "migration has a stable canonical v4 rewrite")
+        check(rewritten.ok and rewritten.data.version == 5, "legacy record rewrites as v5")
+        check(Codec.encode(Codec.decode(rewritten.code).setup).code == rewritten.code, "migration has a stable canonical v5 rewrite")
     var unchanged: Dictionary = Codec.encode(Setup.new()).data
     unchanged.version = 3
     var defaults: Dictionary = Codec.from_data(unchanged)
@@ -113,17 +124,17 @@ func test_v3_migration() -> void:
         "v3 null overrides preserve unchanged catalog resources")
 
 
-func test_v4_roundtrips() -> void:
-    check(Codec.VERSION == 4 and Store.VERSION == 1, "portable format advances while the outer library remains v1")
+func test_current_roundtrips() -> void:
+    check(Codec.VERSION == 5 and Store.VERSION == 1, "portable format advances while the outer library remains v1")
     for partial in [false, true]:
         var setup = configured()
         if partial:
             for id in ["ally_3", "enemy_2", "enemy_3"]:
                 setup.set_enabled(id, false)
         var encoded: Dictionary = Codec.encode(setup)
-        check(encoded.ok and encoded.data.version == 4 and encoded.data.units.size() == (3 if partial else 6), "v4 writes only active rows")
+        check(encoded.ok and encoded.data.version == 5 and encoded.data.units.size() == (3 if partial else 6), "v5 writes only active rows")
         var decoded: Dictionary = Codec.decode(encoded.code)
-        check(decoded.ok, "v4 active matter loadouts import")
+        check(decoded.ok, "v5 active matter loadouts import")
         if not decoded.ok:
             continue
         var copy = decoded.setup
@@ -141,7 +152,7 @@ func test_v4_roundtrips() -> void:
         check(male.magic_spell.spell_power == 20 and male.magic_spell.mana_cost == 10
             and female.magic_spell.spell_power == 20 and female.magic_spell.mana_cost == 10,
             "book portability does not alter spell power or cost")
-        check(Codec.encode(copy).code == encoded.code, "v4 JSON parse rewrites byte-for-byte canonically")
+        check(Codec.encode(copy).code == encoded.code, "v5 JSON parse rewrites byte-for-byte canonically")
         copy.commander_options.ally_1.equipment.clear()
         check(setup.commander_options.ally_1.equipment.size() == 3, "decoded equipment does not alias the source draft")
     for book in ["novice", "forest_talmud", "fire", "wind", "water", "light", "dark"]:
@@ -164,7 +175,7 @@ func test_v4_roundtrips() -> void:
 
 
 func test_strict_versions_and_loadouts() -> void:
-    for version in [0, 5, 99, true, "4", 3.5]:
+    for version in [0, 6, 99, true, "5", 3.5]:
         var data: Dictionary = wire()
         data.version = version
         reject(data, "unsupported version is rejected " + str(version))
@@ -174,14 +185,14 @@ func test_strict_versions_and_loadouts() -> void:
         reject(data, "legacy row schema rejects commander member v" + str(version))
     var masquerade: Dictionary = wire()
     masquerade.version = 3
-    reject(masquerade, "v4 descriptor cannot masquerade as a v3 record")
+    reject(masquerade, "current descriptor cannot masquerade as a v3 record")
     var stripped: Dictionary = v3_data(wire())
     stripped.version = 4
     reject(stripped, "v4 requires explicit matter, equipment and book members")
     for key in NEW_KEYS:
         var data: Dictionary = wire()
         data.units[0].commander.erase(key)
-        reject(data, "v4 requires new descriptor member " + key)
+        reject(data, "v5 requires new descriptor member " + key)
         data = v3_data(wire())
         data.units[0].commander[key] = wire().units[0].commander[key]
         reject(data, "v3 cannot hide any new descriptor member " + key)

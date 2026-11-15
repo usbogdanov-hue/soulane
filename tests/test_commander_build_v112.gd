@@ -33,9 +33,13 @@ func check(ok: bool, label: String) -> void:
         printerr("FAILED commander build v1.12: " + label)
 
 
-func zero_options(level: int = 25, armor: int = 0) -> Dictionary:
-    var options: Dictionary = Build.defaults(MALE)
-    options.merge({"level": level, "armor": armor, "STR": 0, "AGI": 0, "WIS": 0, "INT": 0}, true)
+func auto_options(level: int = 25, armor: int = 0, base_stats = MALE) -> Dictionary:
+    var options: Dictionary = Build.defaults(base_stats)
+    if level >= 1 and level <= 999:
+        options = Build.resize(base_stats, options, level)
+    else:
+        options.level = level
+    options.armor = armor
     return options
 
 
@@ -66,17 +70,17 @@ func test_defaults_and_materialization() -> void:
         check(preview.unspent == original.commander.points_unspent(), "preview reports unspent budget")
         check(is_equal_approx(preview.evasion, Rules.final_evasion(float(attributes.AGI) * 0.5 + original.commander.armor_evasion_bonus())), "preview evasion uses existing armor and universal bounds")
         check(is_equal_approx(preview.crit, clampf(float(attributes.AGI) * 0.5, 0.0, 90.0)), "preview critical chance matches current AGI rule")
-        check(preview.physical_bonus == minf(90.0, float(attributes.STR) * 2.0) and preview.magic_bonus == minf(90.0, float(attributes.INT) * 2.0), "preview damage bonuses use current two-percent rule")
+        check(preview.physical_bonus == minf(90.0, float(attributes.STR)) and preview.magic_bonus == minf(90.0, float(attributes.INT)), "preview damage bonuses use the approved one-percent rule")
         for damage_type in [Rules.PIERCING, Rules.SLASHING, Rules.BLUNT]:
             check(is_equal_approx(preview.pdef_by_type[damage_type], original.commander.physical_defense_pct(damage_type)), "preview preserves weapon-specific armor defense")
         check(is_equal_approx(preview.mdef, original.commander.magic_defense_pct()), "preview magic defense uses current profile math")
-        private_stats.commander.points_str = 0
+        private_stats.commander.level = 10
         private_stats.attack = 999
         private_stats.commander.matter_equipment.append(ITEM)
         check(snapshot(original) == before, "editing materialized values and equipment array never changes catalog")
     check(is_equal_approx(Build.materialize(FEMALE, Build.defaults(FEMALE)).commander.critical_multiplier(), 2.0), "female physical critical multiplier remains two")
     check(is_equal_approx(Build.materialize(MALE, Build.defaults(MALE)).commander.critical_multiplier(), 1.5), "male physical critical multiplier remains one and a half")
-    check(Build.defaults(FALCON).is_empty() and Build.materialize(FALCON, zero_options()) == null, "monster has no editable commander descriptor")
+    check(Build.defaults(FALCON).is_empty() and Build.materialize(FALCON, auto_options()) == null, "monster has no editable commander descriptor")
     check(Build.preview(null, {}).is_empty() and Build.defaults(null).is_empty(), "missing commander fails safely")
 
 
@@ -97,26 +101,33 @@ func test_validation() -> void:
             altered[key] = invalid
             check(not Build.validate(MALE, altered).ok, "invalid type/range rejected: " + key)
     for invalid_level in [0, 1000]:
-        var altered: Dictionary = zero_options(invalid_level)
+        var altered: Dictionary = auto_options(invalid_level)
         check(not Build.validate(MALE, altered).ok, "level range follows current commander 1..999")
     for invalid_armor in [-1, 4]:
-        check(not Build.validate(MALE, zero_options(25, invalid_armor)).ok, "armor must be an existing enum entry")
-    var budget: Dictionary = zero_options(2)
+        check(not Build.validate(MALE, auto_options(25, invalid_armor)).ok, "armor must be an existing enum entry")
+    var budget: Dictionary = auto_options(2)
     budget.AGI = 4
     check(not Build.validate(MALE, budget).ok, "overspending level budget is rejected before setters")
+    var high: Dictionary = auto_options(999)
+    var high_stats = Build.materialize(MALE, high)
     for attribute in ["STR", "INT"]:
-        var capped: Dictionary = zero_options(999)
-        capped[attribute] = 46 - int(MALE.commander.base_record()[attribute.to_lower()])
-        check(not Build.validate(MALE, capped).ok, "base plus allocation must not exceed45: " + attribute)
-    var excessive: Dictionary = zero_options(999)
+        check(Build.validate(MALE, high).ok and high_stats.commander.primary_stats()[attribute] > 45,
+            "valid automatic attributes may exceed the removed 45-point limit: " + attribute)
+    var altered_distribution: Dictionary = auto_options(25)
+    altered_distribution.STR -= 1
+    altered_distribution.AGI += 1
+    check(not Build.validate(MALE, altered_distribution).ok,
+        "manually moving points is rejected even when the total budget still matches")
+    var excessive: Dictionary = auto_options(999)
     excessive.AGI = 2995
     check(not Build.validate(MALE, excessive).ok, "raw allocation is bounded before construction")
-    var floats: Dictionary = zero_options(2)
-    floats.level = 2.0
-    floats.armor = 1.0
-    floats.AGI = 3.0
-    check(Build.validate(MALE, floats).ok and Build.materialize(MALE, floats).commander.points_agi == 3, "integral JSON floats are accepted without masking invalid fractions")
-    check(not Build.validate(FALCON, zero_options()).ok and not Build.validate({}, zero_options()).ok, "non-commander targets are rejected")
+    var floats: Dictionary = auto_options(2, 1)
+    for key in Build.LEGACY_KEYS:
+        floats[key] = float(floats[key])
+    check(Build.validate(MALE, floats).ok and Build.materialize(MALE, floats).commander.points_str == 2
+        and Build.materialize(MALE, floats).commander.points_agi == 1,
+        "integral JSON floats matching automatic growth are accepted without masking fractions")
+    check(not Build.validate(FALCON, auto_options()).ok and not Build.validate({}, auto_options()).ok, "non-commander targets are rejected")
 
 
 func test_resize_and_limits() -> void:
@@ -124,72 +135,87 @@ func test_resize_and_limits() -> void:
     var before: Dictionary = defaults.duplicate(true)
     var reduced: Dictionary = Build.resize(MALE, defaults, 10)
     check(Build.validate(MALE, reduced).ok and reduced.level == 10, "level reduction returns a valid descriptor")
-    check(reduced.STR == 27 and reduced.AGI == 0 and reduced.WIS == 0 and reduced.INT == 0, "level reduction keeps existing STR AGI WIS INT priority")
+    check(reduced.STR == 13 and reduced.AGI == 8 and reduced.WIS == 3 and reduced.INT == 3, "level reduction recalculates the approved automatic ratio")
     check(defaults == before, "resizing does not mutate input options")
     var first: Dictionary = Build.resize(MALE, defaults, 1)
     check(first.STR == 0 and first.AGI == 0 and first.WIS == 0 and first.INT == 0, "level one frees all earned allocations")
     var increased: Dictionary = Build.resize(MALE, defaults, 999)
-    check(increased.STR == defaults.STR and increased.AGI == defaults.AGI and increased.WIS == defaults.WIS and increased.INT == defaults.INT, "raising level never invents an allocation")
-    check(Build.preview(MALE, increased).unspent == 2994 - MALE.commander.points_spent(), "remaining high-level budget is visible")
+    check(increased.STR == 1497 and increased.AGI == 898 and increased.WIS == 300 and increased.INT == 299, "raising level automatically assigns the complete new budget without a 45-point cap")
+    check(Build.preview(MALE, increased).unspent == 0, "automatic growth leaves no earned points unallocated")
     check(Build.resize(MALE, defaults, 1000).is_empty() and Build.resize(MALE, {}, 10).is_empty(), "invalid resize input is not silently repaired")
     for armor in range(4):
-        var options: Dictionary = zero_options(25, armor)
-        options.WIS = 20
+        var options: Dictionary = auto_options(25, armor)
         var stats = Build.materialize(MALE, options)
         check(stats.commander.armor_type == armor, "existing armor choice applied")
         check(stats.commander.max_hp() == MALE.commander.base_record().hp + 24 * 5 + stats.commander.primary_stats().STR * 10, "HP retains existing level and STR formula")
         check(stats.commander.max_mp() == MALE.commander.base_record().mp + 24 * 2 + stats.commander.primary_stats().INT * 5, "MP retains existing level and INT formula")
         check(stats.commander.resolved_matter() == MALE.commander.resolved_matter() and stats.magic_spell.magic_book == MALE.magic_spell.magic_book, "armor and allocation do not rewrite physical or spell matter")
-    var agility: Dictionary = zero_options(999)
-    agility.AGI = 2994
-    var preview: Dictionary = Build.preview(MALE, agility)
-    check(preview.evasion == 90.0 and preview.crit == 90.0, "high AGI still respects current percentage caps")
-    var wisdom: Dictionary = zero_options(999)
-    wisdom.WIS = 2994
-    check(Build.preview(MALE, wisdom).mdef == 90.0, "high WIS still respects current defense cap")
+    var preview: Dictionary = Build.preview(MALE, auto_options(999))
+    check(preview.evasion == 90.0 and preview.crit == 90.0, "high automatic AGI respects percentage caps")
+    check(preview.mdef == 90.0, "high automatic WIS respects the existing defense cap")
+    check(preview.physical_bonus == 90.0 and preview.magic_bonus == 90.0,
+        "unbounded STR and INT still obey the separate 90-percent damage bonus cap")
+    var male_preview: Dictionary = Build.preview(MALE, Build.defaults(MALE))
+    var female_preview: Dictionary = Build.preview(FEMALE, Build.defaults(FEMALE))
+    check(male_preview.stats == {"STR": 46, "AGI": 30, "WIS": 11, "INT": 13}
+        and male_preview.hp == 880 and male_preview.mp == 163
+        and male_preview.physical_bonus == 46.0 and male_preview.magic_bonus == 13.0,
+        "male level25 uses independent approved growth, unchanged HP/MP formula and one-percent bonuses")
+    check(female_preview.stats == {"STR": 30, "AGI": 39, "WIS": 20, "INT": 11}
+        and female_preview.hp == 690 and female_preview.mp == 158
+        and female_preview.physical_bonus == 30.0 and female_preview.magic_bonus == 11.0,
+        "female level25 uses its own approved growth and unchanged HP/MP formula")
+    for archetype in [4, 5]:
+        var mage: SuleynUnitStats = MALE.duplicate(false) as SuleynUnitStats
+        mage.commander = MALE.commander.duplicate(false) as SuleynCommanderProfile
+        mage.commander.archetype = archetype
+        var mage_preview: Dictionary = Build.preview(mage, Build.defaults(mage))
+        check(Build.validate(mage, Build.defaults(mage)).ok and mage_preview.unspent == 0,
+            "approved mage growth is supported by the builder without inventing a playable kit")
+        check(mage_preview.stats == ({"STR": 12, "AGI": 12, "WIS": 30, "INT": 46} if archetype == 4
+            else {"STR": 11, "AGI": 13, "WIS": 46, "INT": 30}),
+            "each mage adds automatic growth to its own base, interpreting DEX as AGI")
 
 
 func test_setup_ownership() -> void:
     var setup = Setup.new()
     check(setup.profile_stats("ally_1") == MALE and setup.profile_stats("ally_2") == FEMALE, "unmodified setup preserves catalog identity")
-    var options: Dictionary = zero_options(10, 2)
-    options.STR = 10
-    options.WIS = 7
+    var options: Dictionary = auto_options(10, 2)
     check(setup.set_commander_options("ally_1", options), "valid per-slot commander options accepted")
     options.STR = 0
-    check(setup.current_commander_options("ally_1").STR == 10, "setter stores an independent descriptor")
+    check(setup.current_commander_options("ally_1").STR == 13, "setter stores an independent descriptor")
     var returned: Dictionary = setup.current_commander_options("ally_1")
     returned.WIS = 0
-    check(setup.current_commander_options("ally_1").WIS == 7, "getter returns an independent descriptor")
+    check(setup.current_commander_options("ally_1").WIS == 3, "getter returns an independent descriptor")
     var actor = setup.profile_stats("ally_1")
     var other = setup.profile_stats("ally_1")
     check(actor != MALE and actor != other and actor.commander != other.commander, "each materialization is private")
-    check(actor.commander.level == 10 and actor.commander.armor_type == 2 and actor.commander.points_str == 10, "private commander uses stored choices")
+    check(actor.commander.level == 10 and actor.commander.armor_type == 2 and actor.commander.points_str == 13, "private commander uses stored choices")
     check(setup.profile_stats("ally_2") == FEMALE and setup.is_valid(), "one configured slot does not change the others")
     var copied = setup.copy()
     copied.commander_options.ally_1.STR = 1
-    check(setup.commander_options.ally_1.STR == 10, "copy deeply isolates commander options")
+    check(setup.commander_options.ally_1.STR == 13, "copy deeply isolates commander options")
     setup.set_enabled("ally_1", false)
-    check(setup.current_commander_options("ally_1").STR == 10, "disabled slot remembers current draft build")
+    check(setup.current_commander_options("ally_1").STR == 13, "disabled slot remembers current draft build")
     setup.set_profile("ally_1", "male")
-    check(setup.is_enabled("ally_1") and setup.current_commander_options("ally_1").STR == 10, "same profile re-enables without erasing build")
+    check(setup.is_enabled("ally_1") and setup.current_commander_options("ally_1").STR == 13, "same profile re-enables without erasing build")
     setup.reset_positions()
-    check(setup.current_commander_options("ally_1").STR == 10, "position reset preserves commander settings")
+    check(setup.current_commander_options("ally_1").STR == 13, "position reset preserves commander settings")
     var before: Dictionary = setup.commander_options.duplicate(true)
-    check(not setup.set_commander_options("ally_1", zero_options(0)) and setup.commander_options == before, "invalid setter leaves prior configuration unchanged")
-    check(not setup.set_commander_options("ally_3", zero_options()) and not setup.set_commander_options("unknown", zero_options()), "monster and unknown slot cannot receive commander settings")
+    check(not setup.set_commander_options("ally_1", auto_options(0)) and setup.commander_options == before, "invalid setter leaves prior configuration unchanged")
+    check(not setup.set_commander_options("ally_3", auto_options()) and not setup.set_commander_options("unknown", auto_options()), "monster and unknown slot cannot receive commander settings")
     setup.set_profile("ally_1", "female")
     check(not setup.commander_options.has("ally_1") and setup.profile_stats("ally_1") == FEMALE, "changing profile clears incompatible custom settings")
-    setup.set_commander_options("ally_1", zero_options(12))
+    setup.set_commander_options("ally_1", auto_options(12, 0, FEMALE))
     setup.reset_commander_options("ally_1")
     check(setup.profile_stats("ally_1") == FEMALE, "explicit build reset restores catalog identity")
-    setup.set_commander_options("ally_1", zero_options(12))
+    setup.set_commander_options("ally_1", auto_options(12, 0, FEMALE))
     setup.reset_defaults()
     check(setup.commander_options.is_empty() and setup.profile_stats("ally_1") == MALE, "default example resets all build settings")
-    setup.commander_options.unknown = zero_options()
+    setup.commander_options.unknown = auto_options()
     check(not setup.is_valid(), "unknown override slot is rejected")
     setup.commander_options.clear()
-    setup.commander_options.ally_3 = zero_options()
+    setup.commander_options.ally_3 = auto_options()
     setup.set_enabled("ally_3", false)
     check(not setup.is_valid(), "invalid monster override remains invalid even while inactive")
 
@@ -198,13 +224,13 @@ func test_purity() -> void:
     var male_before: Dictionary = snapshot(MALE)
     var female_before: Dictionary = snapshot(FEMALE)
     var setup = Setup.new()
-    setup.set_commander_options("ally_1", zero_options(50, 1))
+    setup.set_commander_options("ally_1", auto_options(50, 1))
     seed(91572)
     var expected: float = randf()
     seed(91572)
     for iteration in range(8):
         Build.defaults(MALE)
-        Build.preview(MALE, zero_options(25, iteration % 4))
+        Build.preview(MALE, auto_options(25, iteration % 4))
         Build.materialize(FEMALE, Build.defaults(FEMALE))
         Build.resize(MALE, Build.defaults(MALE), 10 + iteration)
         setup.profile_stats("ally_1")

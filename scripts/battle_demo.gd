@@ -940,7 +940,7 @@ func make_unit(unit_id: String, side: String, stats: SuleynUnitStats):
         unit.attributes = stats.commander.primary_stats()
         unit.unspent_points = stats.commander.points_unspent()
         var a: Dictionary = unit.attributes
-        unit.physical_damage_bonus_pct = minf(90.0, float(a["STR"]) * 2.0)
+        unit.physical_damage_bonus_pct = Rules.stat_damage_bonus(float(a["STR"]))
         unit.evasion_pct = Rules.final_evasion(float(a["AGI"]) * 0.5 + float(stats.commander.armor_evasion_bonus()))
         unit.crit_chance_pct = clampf(float(a["AGI"]) * 0.5, 0.0, 90.0)
         unit.physical_resistance_pct = 0.0
@@ -953,9 +953,10 @@ func make_unit(unit_id: String, side: String, stats: SuleynUnitStats):
             1: float(stats.commander.armor_weapon_bonus(1)),
             2: float(stats.commander.armor_weapon_bonus(2)),
         }
-        unit.magic_power_pct = minf(90.0, float(a["INT"]) * 2.0)
+        unit.magic_power_pct = Rules.stat_damage_bonus(float(a["INT"]))
         unit.mana_regen_pct = clampf(float(a["WIS"]) * 0.3, 0.0, 90.0)
-        unit.magic_resistance_pct = minf(90.0, float(a["WIS"]) * 2.0)
+        # Defense is capped after armor, effects and matter have been combined.
+        unit.magic_resistance_pct = Rules.wis_mdef_bonus(float(a["WIS"]))
     return unit
 
 

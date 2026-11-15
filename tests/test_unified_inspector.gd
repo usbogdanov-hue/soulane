@@ -15,8 +15,8 @@ func _initialize() -> void:
     test_level_decrease_priority_boundaries()
     test_repeated_level_decrease_and_increase()
     test_level_decrease_with_unspent_points()
-    test_nested_base_caps_preserve_other_allocations()
-    test_replaced_base_caps_before_level_decrease()
+    test_nested_base_edits_preserve_allocations()
+    test_replaced_base_before_level_decrease()
     test_edit_shared_base_without_changing_archetype()
     if failures == 0:
         print("SULEYN v0.9: %d unified Inspector checks passed." % checks)
@@ -31,9 +31,18 @@ func check(condition: bool, description: String) -> void:
         failures += 1
         printerr("FAILED: " + description)
 
+func manual_copy(original):
+    var result = original.duplicate(false)
+    result.auto_allocate = false
+    result.points_str = 0
+    result.points_agi = 0
+    result.points_wis = 0
+    result.points_int = 0
+    return result
+
 func test_connected_base_resources() -> void:
-    var f = Ally.commander
-    var m = Enemy.commander
+    var f = manual_copy(Ally.commander)
+    var m = manual_copy(Enemy.commander)
     check(f.base_stats != null and m.base_stats != null, "both demo commanders expose base resource")
     check(f.base_stats == Profile.BASES[1], "female reference shares the GDD archetype resource")
     check(m.base_stats == Profile.BASES[0], "male reference shares the GDD archetype resource")
@@ -41,7 +50,7 @@ func test_connected_base_resources() -> void:
     check(m.max_hp() == 445 and m.max_mp() == 98, "male fixed HP/MP growth preserved")
 
 func test_editor_preview_properties() -> void:
-    var p = Ally.commander
+    var p = manual_copy(Ally.commander)
     var props: Dictionary = {}
     for item in p.get_property_list():
         props[item["name"]] = item
@@ -57,6 +66,7 @@ func test_editor_preview_properties() -> void:
 
 func test_points_limit_and_level_decrease() -> void:
     var p = Profile.new()
+    p.auto_allocate = false
     p.archetype = 1
     p.level = 10
     p.points_str = 18
@@ -80,6 +90,7 @@ func test_level_decrease_priority_boundaries() -> void:
     ]
     for scenario in scenarios:
         var p = Profile.new()
+        p.auto_allocate = false
         p.archetype = 1
         p.level = 10
         p.points_str = 6
@@ -98,6 +109,7 @@ func test_level_decrease_priority_boundaries() -> void:
 
 func test_repeated_level_decrease_and_increase() -> void:
     var p = Profile.new()
+    p.auto_allocate = false
     p.archetype = 1
     p.level = 10
     p.points_str = 18
@@ -117,6 +129,7 @@ func test_repeated_level_decrease_and_increase() -> void:
 
 func test_level_decrease_with_unspent_points() -> void:
     var p = Profile.new()
+    p.auto_allocate = false
     p.archetype = 1
     p.level = 10
     p.points_str = 2
@@ -134,8 +147,9 @@ func test_level_decrease_with_unspent_points() -> void:
     check([p.points_str, p.points_agi, p.points_wis, p.points_int] == [2, 3, 1, 2],
         "reapplying the same level leaves allocations unchanged")
 
-func test_nested_base_caps_preserve_other_allocations() -> void:
+func test_nested_base_edits_preserve_allocations() -> void:
     var p = Profile.new()
+    p.auto_allocate = false
     p.archetype = 1
     p.base_stats = Profile.BASES[1].duplicate()
     p.level = 10
@@ -144,32 +158,33 @@ func test_nested_base_caps_preserve_other_allocations() -> void:
     p.points_wis = 6
     p.points_int = 9
     p.base_stats.base_str = 43
-    check([p.points_str, p.points_agi, p.points_wis, p.points_int] == [2, 6, 6, 9],
-        "a nested STR cap edit returns only excess STR points")
-    check(p.primary_stats()["STR"] == 45 and p.points_unspent() == 4 and p.valid_allocation(),
-        "nested STR edit enforces the hard cap and returns points to the budget")
+    check([p.points_str, p.points_agi, p.points_wis, p.points_int] == [6, 6, 6, 9],
+        "a nested STR edit preserves every allocated point")
+    check(p.primary_stats()["STR"] == 49 and p.points_unspent() == 0 and p.valid_allocation(),
+        "nested STR edit may exceed forty-five without changing the point budget")
     p.base_stats.base_int = 43
-    check([p.points_str, p.points_agi, p.points_wis, p.points_int] == [2, 6, 6, 2],
-        "a nested INT cap edit preserves unrelated allocations")
-    check(p.primary_stats()["INT"] == 45 and p.points_unspent() == 11 and p.valid_allocation(),
-        "nested INT edit enforces the hard cap and returns points to the budget")
-    check(p.max_hp() == 765 and p.max_mp() == 298,
-        "capped base edits preserve HP/MP formulas")
+    check([p.points_str, p.points_agi, p.points_wis, p.points_int] == [6, 6, 6, 9],
+        "a nested INT edit preserves allocated points")
+    check(p.primary_stats()["INT"] == 52 and p.points_unspent() == 0 and p.valid_allocation(),
+        "nested INT edit may exceed forty-five without changing the point budget")
+    check(p.max_hp() == 805 and p.max_mp() == 333,
+        "uncapped attributes retain the existing HP/MP contributions")
     p.level = 5
-    check([p.points_str, p.points_agi, p.points_wis, p.points_int] == [2, 6, 4, 0],
-        "level decrease after cap edits still prioritizes STR > AGI > WIS > INT")
+    check([p.points_str, p.points_agi, p.points_wis, p.points_int] == [6, 6, 0, 0],
+        "level decrease after base edits still prioritizes STR > AGI > WIS > INT")
     check(p.points_unspent() == 0 and p.valid_allocation(),
-        "level decrease after cap edits uses the new budget")
-    check(p.max_hp() == 740 and p.max_mp() == 278,
-        "level decrease after cap edits recalculates HP/MP")
+        "level decrease after base edits uses the new budget")
+    check(p.max_hp() == 780 and p.max_mp() == 278,
+        "level decrease after base edits recalculates HP/MP")
 
-func test_replaced_base_caps_before_level_decrease() -> void:
+func test_replaced_base_before_level_decrease() -> void:
     var scenarios: Array = [
-        {"base_str": 40, "points": [5, 7, 0, 0], "unspent": 0},
-        {"base_str": 45, "points": [0, 9, 0, 0], "unspent": 3},
+        {"base_str": 40, "points": [12, 0, 0, 0], "unspent": 0, "hp": 810},
+        {"base_str": 45, "points": [12, 0, 0, 0], "unspent": 0, "hp": 860},
     ]
     for scenario in scenarios:
         var p = Profile.new()
+        p.auto_allocate = false
         p.archetype = 1
         p.level = 10
         p.points_str = 18
@@ -180,14 +195,15 @@ func test_replaced_base_caps_before_level_decrease() -> void:
         p.level = 5
         var label: String = "replaced base STR%d" % replacement.base_str
         check([p.points_str, p.points_agi, p.points_wis, p.points_int] == scenario["points"],
-            label + " caps STR before assigning the reduced budget")
+            label + " preserves the reduced point budget independently of base STR")
         check(p.points_unspent() == scenario["unspent"] and p.valid_allocation(),
-            label + " preserves AGI points that fit the reduced budget")
-        check(p.max_hp() == 740 and p.max_mp() == 83,
-            label + " retains capped STR and HP/MP formulas")
+            label + " keeps the remaining point budget valid")
+        check(p.max_hp() == scenario["hp"] and p.max_mp() == 83,
+            label + " retains uncapped STR and HP/MP formulas")
 
 func test_edit_shared_base_without_changing_archetype() -> void:
     var p = Profile.new()
+    p.auto_allocate = false
     p.archetype = 1
     p.level = 10
     p.base_stats = Profile.BASES[1]

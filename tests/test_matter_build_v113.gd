@@ -41,11 +41,10 @@ func choices(class_matter: int = Matter.NEUTRAL, equipment: Array = [], book: St
 
 
 func legacy(base_stats = MALE) -> Dictionary:
-    var result: Dictionary = {}
-    var options: Dictionary = Build.defaults(base_stats)
-    for key in Build.LEGACY_KEYS:
-        result[key] = options[key]
-    return result
+    # Genuine pre-automatic v3 data; do not derive history from new defaults.
+    if base_stats == MALE:
+        return {"level": 25, "armor": 3, "STR": 35, "AGI": 10, "WIS": 20, "INT": 7}
+    return {"level": 25, "armor": 1, "STR": 12, "AGI": 45, "WIS": 10, "INT": 5}
 
 
 func numeric_preview(preview: Dictionary) -> Dictionary:
@@ -193,7 +192,7 @@ func test_legacy_upgrade() -> void:
         var old: Dictionary = legacy(original)
         var before: Dictionary = old.duplicate(true)
         var migrated: Dictionary = Build.migrate_v3(original, old)
-        check(migrated.ok and migrated.options == Build.defaults(original), "v3 upgrade fills original matter and book defaults for each commander")
+        check(migrated.ok and migrated.options == Build.defaults(original), "v3 upgrade recalculates approved growth and fills original matter/book defaults")
         check(old == before and Build.validate(original, migrated.options).ok, "legacy upgrade validates without mutating original six fields")
         var floats: Dictionary = old.duplicate(true)
         for key in floats:
@@ -206,8 +205,27 @@ func test_legacy_upgrade() -> void:
     for change in [{"level": 0}, {"level": 1000}, {"armor": 4}, {"STR": 36}, {"INT": 40}, {"AGI": 2995}, {"AGI": 0.5}, {"WIS": false}, {"level": 2, "STR": 0, "AGI": 4, "WIS": 0, "INT": 0}]:
         var old: Dictionary = legacy()
         old.merge(change, true)
-        check(not Build.migrate_v3(MALE, old).ok, "legacy migration keeps existing numeric bounds, caps and budget")
+        check(not Build.migrate_v3(MALE, old).ok, "legacy migration validates historical numeric bounds, old caps and budget before recalculation")
+    for capped in [{"level": 25, "armor": 0, "STR": 36, "AGI": 0, "WIS": 0, "INT": 0},
+        {"level": 25, "armor": 0, "STR": 0, "AGI": 0, "WIS": 0, "INT": 40}]:
+        check(not Build.migrate_v3(MALE, capped).ok,
+            "historical 45-point cap is checked even when the legacy budget is not exhausted")
     check(not Build.migrate_v3(FALCON, legacy()).ok, "legacy migration never turns a monster into a commander")
+    var old_v4: Dictionary = choices(Matter.FIRE, ["water_shield", "plain_sword"], "water")
+    old_v4.merge(legacy(), true)
+    var before_v4: Dictionary = old_v4.duplicate(true)
+    var migrated_v4: Dictionary = Build.migrate_v4(MALE, old_v4)
+    check(migrated_v4.ok and Build.validate(MALE, migrated_v4.options).ok
+        and migrated_v4.options.STR == 36 and migrated_v4.options.AGI == 22
+        and migrated_v4.options.WIS == 7 and migrated_v4.options.INT == 7,
+        "v4 manual growth is replaced by the approved automatic allocation")
+    check(old_v4 == before_v4 and migrated_v4.options.class_matter == Matter.FIRE
+        and migrated_v4.options.equipment == ["plain_sword", "water_shield"] and migrated_v4.options.book == "water",
+        "v4 migration preserves matter and book choices without mutating old input")
+    migrated_v4.options.equipment.clear()
+    check(old_v4.equipment.size() == 2, "migrated v4 equipment array does not alias legacy data")
+    check(not Build.migrate_v4(MALE, choices()).ok,
+        "v4 migration still rejects a forged historical descriptor above its old 45-point limit")
 
 
 func test_purity() -> void:

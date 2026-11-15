@@ -38,30 +38,46 @@ func check(ok: bool, label: String) -> void:
 func near(a: float, b: float) -> bool:
     return absf(a - b) < 0.0001
 
+func manual_profile(original):
+    var profile = original.duplicate(false)
+    profile.auto_allocate = false
+    profile.points_str = 0
+    profile.points_agi = 0
+    profile.points_wis = 0
+    profile.points_int = 0
+    return profile
+
+func manual_stats(original):
+    var stats = original.duplicate(false)
+    stats.commander = manual_profile(original.commander)
+    return stats
+
 func test_growth_and_bonuses() -> void:
-    var f = Ally.commander
-    var m = Enemy.commander
+    var f = manual_profile(Ally.commander)
+    var m = manual_profile(Enemy.commander)
     check(f.max_hp() == 395 and f.max_mp() == 93, "female L10 HP 395 MP 93")
     check(m.max_hp() == 445 and m.max_mp() == 98, "male L10 HP 445 MP 98")
     check(f.points_earned() == 27 and m.points_earned() == 27, "level 10 earns 27 points")
     check(near(f.get("evasion_percent"), 5.0) and near(m.get("evasion_percent"), 5.0), "v1.3 universal dodge floor 5% after AGI and armor")
     check(near(f.get("crit_chance_percent"), 5.0) and near(m.get("crit_chance_percent"), 4.0), "AGI critical 0.5%")
     check(near(f.get("mana_regen_percent"), 1.8) and near(m.get("mana_regen_percent"), 1.2), "WIS regen 0.3%")
-    check(near(f.get("magic_resistance_percent"), 12.0), "WIS magic resistance +2%")
-    check(near(f.get("physical_damage_bonus_percent"), 16.0), "STR physical attack +2%")
+    check(near(f.get("magic_resistance_percent"), 6.0), "WIS magic resistance +1%")
+    check(near(f.get("physical_damage_bonus_percent"), 8.0), "STR physical attack +1%")
     var woman = Profile.new()
+    woman.auto_allocate = false
     woman.archetype = 1
     woman.level = 30
     woman.points_str = 40
     woman.points_agi = 30
     woman.points_wis = 12
     woman.points_int = 5
-    check(woman.points_unspent() == 3 and woman.points_str == 37 and woman.max_hp() == 865 and woman.max_mp() == 158,
-        "female L30: STR hard-capped at 45; surplus points remain")
+    check(woman.points_unspent() == 0 and woman.points_str == 40 and woman.max_hp() == 895 and woman.max_mp() == 158,
+        "female L30: all 87 points fit and total STR may exceed forty-five")
     check(near(woman.get("evasion_percent"), 20.0), "without armor 40 AGI=20 evade")
     woman.armor_type = 3
     check(near(woman.get("evasion_percent"), 10.0), "heavy -10 evade")
     var mage = Profile.new()
+    mage.auto_allocate = false
     mage.archetype = 4
     mage.level = 30
     mage.points_str = 5
@@ -69,14 +85,19 @@ func test_growth_and_bonuses() -> void:
     mage.points_wis = 25
     mage.points_int = 45
     mage.armor_type = 1
-    check(mage.max_hp() == 395 and mage.max_mp() == 383 and mage.primary_stats()["INT"] == 45,
-        "male mage L30 INT capped at 45, HP 395 MP 383")
+    check(mage.max_hp() == 395 and mage.max_mp() == 433 and mage.primary_stats()["INT"] == 55,
+        "male mage L30 INT 55, HP 395 MP 433")
     check(near(mage.get("mana_regen_percent"), 9.9), "33 WIS -> 9.9% mana regen")
-    check(near(mage.get("magic_power_percent"), 90.0), "INT bonus limited at 90%")
-    check(near(mage.magic_defense_pct(), 86.0), "mage MDEF 66 WIS + 20 armor=86")
+    check(near(mage.get("magic_power_percent"), 55.0), "55 INT grants 55% magic damage")
+    check(near(mage.magic_defense_pct(), 53.0), "mage MDEF 33 WIS + 20 armor=53")
+    mage.level = 50
+    mage.points_int = 100
+    check(mage.primary_stats()["INT"] == 110 and near(mage.get("magic_power_percent"), 90.0),
+        "INT itself exceeds ninety while the magic damage bonus stops at ninety percent")
 
 func test_armor_and_defense() -> void:
     var p = Profile.new()
+    p.auto_allocate = false
     p.archetype = 1
     for row in [[0, 0, 0, 0, 0], [1, 0, 0, 0, 20], [2, 20, 10, 20, 10], [3, 40, 30, 20, 0]]:
         p.armor_type = row[0]
@@ -87,7 +108,7 @@ func test_armor_and_defense() -> void:
     p.armor_type = 1
     check(near(p.physical_defense_pct(Rules.PIERCING, -20.0), -20.0), "negative resistance from debuff allowed")
     p.armor_type = 3
-    check(near(p.magic_defense_pct(), 12.0), "female heavy adds 0 MDEF + 12 from WIS")
+    check(near(p.magic_defense_pct(), 6.0), "female heavy adds 0 MDEF + 6 from WIS")
 
 func test_monster_categories() -> void:
     var monster = Unit.new("monster", "red", 100, 5)
@@ -134,14 +155,14 @@ func test_limits_and_damage() -> void:
 
 func test_runtime_combat() -> void:
     var demo = Demo.new()
-    var f = demo.make_unit("A", "blue", Ally)
-    var m = demo.make_unit("E", "red", Enemy)
+    var f = demo.make_unit("A", "blue", manual_stats(Ally))
+    var m = demo.make_unit("E", "red", manual_stats(Enemy))
     check(f.hp == 395 and f.mp == 93 and m.hp == 445 and m.mp == 98, "runtime uses revised HP/MP")
     check(f.melee_skill_power == 8 and m.melee_skill_power == 7, "power comes from separate skill resources")
     check(f.melee_damage_type == Rules.SLASHING, "skill type is slashing")
     check(near(m.physical_defense_pct(Rules.SLASHING), 10.0), "medium armor vs slashing only base 10%")
     check(near(f.physical_defense_pct(Rules.SLASHING), 30.0), "heavy armor vs slashing 20+10=30%")
-    check(near(f.magic_defense_pct(), 12.0) and near(m.magic_defense_pct(), 18.0), "total commander MDEF")
+    check(near(f.magic_defense_pct(), 6.0) and near(m.magic_defense_pct(), 14.0), "total commander MDEF")
     var board = Board.new(4, 4)
     board.add_unit("A", Vector2i(1, 1))
     board.add_unit("E", Vector2i(2, 1))
@@ -149,7 +170,7 @@ func test_runtime_combat() -> void:
     var dodge: Dictionary = Combat.melee_attack(board, units, "A", "E", 0.0, 99.0)
     check(dodge.get("ok", false) and dodge.get("evaded", false) and m.hp == 445, "forced dodge")
     var hit: Dictionary = Combat.melee_attack(board, units, "A", "E", 99.0, 0.0)
-    var expected: int = Damage.physical_damage(8, 16.0, m.physical_defense_pct(Rules.SLASHING, -15.0), 1.5)
+    var expected: int = Damage.physical_damage(8, 8.0, m.physical_defense_pct(Rules.SLASHING, -15.0), 1.5)
     check(hit.get("ok", false) and not hit.get("evaded", true) and hit.get("critical", false), "forced critical event")
     check(hit.get("damage", -1) == expected and m.hp == 445 - expected, "skill power - defense attack result")
     check(hit.get("pdef_percent", -1.0) == -5.0, "water beats fire, subtracts 15 pp PDEF")

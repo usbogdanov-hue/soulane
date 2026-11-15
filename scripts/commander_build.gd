@@ -4,6 +4,7 @@ extends RefCounted
 
 const Rules = preload("res://scripts/combat_rules.gd")
 const Matter = preload("res://scripts/matter_rules.gd")
+const Growth = preload("res://scripts/commander_growth.gd")
 const LEGACY_KEYS: Array[String] = ["level", "armor", "STR", "AGI", "WIS", "INT"]
 const KEYS: Array[String] = ["level", "armor", "STR", "AGI", "WIS", "INT", "class_matter", "equipment", "book"]
 const ATTRIBUTES: Array[String] = ["STR", "AGI", "WIS", "INT"]
@@ -41,9 +42,10 @@ static func defaults(base_stats) -> Dictionary:
             if base_stats.magic_spell.magic_book == BOOKS[key]:
                 book = key
                 break
+    var growth: Dictionary = Growth.points(profile.archetype, profile.level)
     return {"level": profile.level, "armor": profile.armor_type,
-        "STR": profile.points_str, "AGI": profile.points_agi,
-        "WIS": profile.points_wis, "INT": profile.points_int,
+        "STR": growth.STR, "AGI": growth.AGI,
+        "WIS": growth.WIS, "INT": growth.INT,
         "class_matter": profile.class_matter, "equipment": equipment, "book": book}
 
 
@@ -56,6 +58,17 @@ static func book_label(key: String) -> String:
 
 
 static func validate(base_stats, options: Variant) -> Dictionary:
+    var fields: Dictionary = _validate_fields(base_stats, options)
+    if not fields.ok:
+        return fields
+    var expected: Dictionary = Growth.points(base_stats.commander.archetype, int(options.level))
+    for key in ATTRIBUTES:
+        if int(options[key]) != int(expected[key]):
+            return _failure("Очки характеристик распределяются автоматически по уровню и классу.")
+    return {"ok": true, "reason": ""}
+
+
+static func _validate_fields(base_stats, options: Variant) -> Dictionary:
     if not _supports(base_stats):
         return _failure("Настройка доступна только выбранному командиру.")
     if not _has_keys(options, KEYS):
@@ -84,10 +97,31 @@ static func migrate_v3(base_stats, legacy_options: Variant) -> Dictionary:
     var validation: Dictionary = _validate_numeric(base_stats, legacy_options)
     if not validation.ok:
         return {"ok": false, "reason": validation.reason, "options": {}}
+    if not _legacy_caps(base_stats, legacy_options):
+        return {"ok": false, "reason": "Прежнее распределение превышает допустимые характеристики.", "options": {}}
     var result: Dictionary = defaults(base_stats)
-    for key in LEGACY_KEYS:
-        result[key] = int(legacy_options[key])
+    result.level = int(legacy_options.level)
+    result.armor = int(legacy_options.armor)
+    result.merge(Growth.points(base_stats.commander.archetype, result.level), true)
     return {"ok": true, "reason": "", "options": canonical(result)}
+
+
+static func migrate_v4(base_stats, legacy_options: Variant) -> Dictionary:
+    var validation: Dictionary = _validate_fields(base_stats, legacy_options)
+    if not validation.ok:
+        return {"ok": false, "reason": validation.reason, "options": {}}
+    if not _legacy_caps(base_stats, legacy_options):
+        return {"ok": false, "reason": "Прежнее распределение превышает допустимые характеристики.", "options": {}}
+    var result: Dictionary = canonical(legacy_options)
+    result.merge(Growth.points(base_stats.commander.archetype, result.level), true)
+    return {"ok": true, "reason": "", "options": result}
+
+
+static func _legacy_caps(base_stats, options: Dictionary) -> bool:
+    # Version 3/4 historically bounded the two attributes. Validate that schema
+    # before replacing old manual points with the current automatic growth.
+    var base: Dictionary = base_stats.commander.base_record()
+    return int(base["str"]) + int(options.STR) <= 45 and int(base["int"]) + int(options.INT) <= 45
 
 
 ## Call after validation. Each result owns its plain equipment array, and item
@@ -116,9 +150,6 @@ static func _validate_numeric(base_stats, options: Dictionary) -> Dictionary:
         spent += int(options[key])
     if spent > (int(options.level) - 1) * 3:
         return _failure("Распределено больше очков, чем доступно на этом уровне.")
-    var base: Dictionary = base_stats.commander.base_record()
-    if int(base["str"]) + int(options.STR) > 45 or int(base["int"]) + int(options.INT) > 45:
-        return _failure("Итоговые STR и INT не могут превышать 45.")
     return {"ok": true, "reason": ""}
 
 
@@ -127,14 +158,7 @@ static func resize(base_stats, options: Variant, new_level: Variant) -> Dictiona
         return {}
     var result: Dictionary = canonical(options)
     result.level = int(new_level)
-    var remaining: int = (result.level - 1) * 3
-    var base: Dictionary = base_stats.commander.base_record()
-    for key in ATTRIBUTES:
-        var cap: int = MAX_POINTS
-        if key == "STR" or key == "INT":
-            cap = maxi(0, 45 - int(base[key.to_lower()]))
-        result[key] = mini(int(result[key]), mini(cap, remaining))
-        remaining -= int(result[key])
+    result.merge(Growth.points(base_stats.commander.archetype, int(new_level)), true)
     return result
 
 
@@ -149,6 +173,7 @@ static func materialize(base_stats, options: Variant) -> SuleynUnitStats:
     for key in ITEM_KEYS:
         if options.equipment.has(key):
             equipment.append(ITEMS[key])
+    profile.auto_allocate = true
     profile.matter_equipment = equipment
     profile.class_matter = int(options.class_matter)
     profile.points_str = 0
@@ -192,8 +217,8 @@ static func preview(base_stats, options: Variant) -> Dictionary:
         "mdef": profile.magic_defense_pct(),
         "evasion": Rules.final_evasion(float(attributes.AGI) * 0.5 + profile.armor_evasion_bonus()),
         "crit": clampf(float(attributes.AGI) * 0.5, 0.0, 90.0),
-        "physical_bonus": minf(90.0, float(attributes.STR) * 2.0),
-        "magic_bonus": minf(90.0, float(attributes.INT) * 2.0),
+        "physical_bonus": Rules.stat_damage_bonus(float(attributes.STR)),
+        "magic_bonus": Rules.stat_damage_bonus(float(attributes.INT)),
         "body_matter": body_matter, "spell_matter": spell_matter,
         "source_counts": counts, "source_text": _source_text(counts, body_matter),
         "book_name": book_label(options.book),
@@ -203,7 +228,7 @@ static func preview(base_stats, options: Variant) -> Dictionary:
 static func _supports(base_stats) -> bool:
     return (typeof(base_stats) == TYPE_OBJECT and is_instance_valid(base_stats)
         and base_stats is SuleynUnitStats and base_stats.commander != null
-        and base_stats.commander.archetype in [0, 1])
+        and Growth.supports(base_stats.commander.archetype))
 
 
 static func _integer(value: Variant, minimum: int, maximum: int) -> bool:

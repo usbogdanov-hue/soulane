@@ -5,6 +5,7 @@ const Unit = preload("res://scripts/battle_unit.gd")
 const Board = preload("res://scripts/battle_board.gd")
 const Combat = preload("res://scripts/battle_combat.gd")
 const Formula = preload("res://scripts/damage_calculator.gd")
+const Rules = preload("res://scripts/combat_rules.gd")
 const AllyTemplate = preload("res://data/demo_ally.tres")
 const EnemyTemplate = preload("res://data/demo_enemy.tres")
 
@@ -40,6 +41,14 @@ func test_formula() -> void:
     check(Formula.physical_damage(7, 0.0, 0.0) == 7, "skill power 7 with no defense")
     check(Formula.physical_damage(1, 0.0, 90.0) == 0, "small attacks may round to zero")
     check(Formula.physical_damage(-10, 0.0, 0.0) == 0, "negative stats are sanitized")
+    check(Rules.stat_damage_bonus(45) == 45.0 and Rules.stat_damage_bonus(60) == 60.0,
+        "STR and INT each grant one percent per point above the former stat cap")
+    check(Rules.stat_damage_bonus(90) == 90.0 and Rules.stat_damage_bonus(9999) == 90.0,
+        "damage bonus retains the ninety-percent cap without capping the stat")
+    check(Rules.stat_damage_bonus(-1) == 0.0, "negative damage stats cannot create a damage bonus")
+    check(Formula.physical_damage(100, Rules.stat_damage_bonus(60)) == 160
+        and Formula.magical_damage(100, Rules.stat_damage_bonus(45)) == 145,
+        "physical and magic damage consume the same new one-percent bonus")
 
 func test_stats_in_combat() -> void:
     var board = Board.new(4, 4)

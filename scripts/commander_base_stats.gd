@@ -8,9 +8,9 @@ extends Resource
     set(value):
         display_name = value
         emit_changed()
-@export_range(0, 45, 1) var base_str: int = 0:
+@export_range(0, 9999, 1) var base_str: int = 0:
     set(value):
-        base_str = clampi(value, 0, 45)
+        base_str = maxi(0, value)
         emit_changed()
 @export_range(0, 9999, 1) var base_agi: int = 0:
     set(value):
@@ -20,9 +20,9 @@ extends Resource
     set(value):
         base_wis = value
         emit_changed()
-@export_range(0, 45, 1) var base_int: int = 0:
+@export_range(0, 9999, 1) var base_int: int = 0:
     set(value):
-        base_int = clampi(value, 0, 45)
+        base_int = maxi(0, value)
         emit_changed()
 @export_range(1, 999999, 1) var base_hp: int = 1:
     set(value):

@@ -46,11 +46,11 @@ func run_tests() -> void:
     var man = demo.make_unit("man", "blue", Male)
     var woman = demo.make_unit("woman", "red", Female)
     check(near(float(Male.commander.get("evasion_percent")), 5.0), "male Inspector has 5% floor")
-    check(near(float(Female.commander.get("evasion_percent")), 37.5), "female Inspector remains 37.5%")
+    check(near(float(Female.commander.get("evasion_percent")), 29.5), "female Inspector reflects automatic AGI and light armor")
     check(near(man.evasion_pct, 5.0) and near(man.final_evasion_pct(), 5.0),
-        "male runtime 18 AGI minus heavy armor = 5%, not 0%")
-    check(near(woman.evasion_pct, 37.5), "woman runtime 55 AGI plus light armor = 37.5%")
-    check(near(man.crit_chance_pct, 9.0) and near(woman.crit_chance_pct, 27.5),
+        "male runtime 30 AGI minus heavy armor = 5%")
+    check(near(woman.evasion_pct, 29.5), "woman runtime 39 AGI plus light armor = 29.5%")
+    check(near(man.crit_chance_pct, 15.0) and near(woman.crit_chance_pct, 19.5),
         "evasion floor does not change physical crit chances")
     check(near(woman.critical_multiplier, 2.0), "female passive x2 critical remains active")
 
@@ -86,9 +86,9 @@ func run_tests() -> void:
     var heroes: Dictionary = {"man": man, "woman": woman}
     var man_hp_before: int = man.hp
     var passive_crit = Combat.melee_attack(board2, heroes, "woman", "man", 99.0, 0.0)
-    check(bool(passive_crit.get("critical", false)) and int(passive_crit.get("damage", -1)) == 168,
-        "female 27.5% physical crit chance, x2 passive damage unchanged")
-    check(man.hp == man_hp_before - 168, "critical damage applies correctly")
+    check(bool(passive_crit.get("critical", false)) and int(passive_crit.get("damage", -1)) == 156,
+        "female 19.5% physical crit chance keeps the x2 passive")
+    check(man.hp == man_hp_before - 156, "critical damage applies correctly")
 
     var board3 = Board.new(5, 5)
     var another_man = demo.make_unit("m2", "blue", Male)

@@ -6,7 +6,7 @@ const Setup = preload("res://scripts/battle_setup.gd")
 const Arena = preload("res://scripts/battle_arena.gd")
 const Build = preload("res://scripts/commander_build.gd")
 const FORMAT: String = "suleyn.setup"
-const VERSION: int = 4
+const VERSION: int = 5
 const MAX_BYTES: int = 65536
 const TOP_KEYS: Array[String] = ["format", "version", "columns", "rows", "arena", "enemy_ai", "units"]
 const LEGACY_UNIT_KEYS: Array[String] = ["id", "profile", "x", "y"]
@@ -85,8 +85,10 @@ static func from_data(data: Variant) -> Dictionary:
         if version >= 3 and row.commander != null:
             var base_stats: SuleynUnitStats = Setup.catalog_entry(row.profile)
             var commander: Variant = row.commander
-            if version == 3:
-                var migrated: Dictionary = Build.migrate_v3(base_stats, commander)
+            if version == 3 or version == 4:
+                # Historical descriptors carry manual allocations. Validate
+                # their original rules before deriving the new class growth.
+                var migrated: Dictionary = Build.migrate_v3(base_stats, commander) if version == 3 else Build.migrate_v4(base_stats, commander)
                 if not migrated.ok:
                     return _failure("Настройка командира недопустима: " + str(migrated.reason))
                 commander = migrated.options

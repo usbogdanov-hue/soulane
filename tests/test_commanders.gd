@@ -27,6 +27,15 @@ func check(condition: bool, description: String) -> void:
         failures += 1
         printerr("FAILED: " + description)
 
+func manual_copy(original):
+    var result = original.duplicate(false)
+    result.auto_allocate = false
+    result.points_str = 0
+    result.points_agi = 0
+    result.points_wis = 0
+    result.points_int = 0
+    return result
+
 func test_all_base_profiles() -> void:
     var cases = [
         [0, 10, 8, 4, 6, 300, 50],
@@ -38,6 +47,7 @@ func test_all_base_profiles() -> void:
     ]
     for item in cases:
         var p = Profile.new()
+        p.auto_allocate = false
         p.archetype = item[0]
         var s: Dictionary = p.primary_stats()
         check(s["STR"] == item[1] and s["AGI"] == item[2]
@@ -49,8 +59,8 @@ func test_all_base_profiles() -> void:
             "class %d: level 1 has no level-up points" % item[0])
 
 func test_level_ten_warriors() -> void:
-    var f = Ally.commander
-    var m = Enemy.commander
+    var f = manual_copy(Ally.commander)
+    var m = manual_copy(Enemy.commander)
     check(f.archetype == 1 and f.level == 10 and f.armor_type == 3,
         "female warrior level 10, heavy armor")
     check(m.archetype == 0 and m.level == 10 and m.armor_type == 2,
@@ -66,6 +76,7 @@ func test_level_ten_warriors() -> void:
 
 func test_point_distribution() -> void:
     var p = Profile.new()
+    p.auto_allocate = false
     p.level = 10
     p.archetype = 1
     p.points_str = 12
@@ -83,9 +94,10 @@ func test_point_distribution() -> void:
         "overallocated level-up points are prevented")
 
 func test_runtime_health_and_mana() -> void:
-    var f = Unit.new("A", "blue", Ally.commander.max_hp(), Ally.attack,
+    var profile = manual_copy(Ally.commander)
+    var f = Unit.new("A", "blue", profile.max_hp(), Ally.attack,
         Ally.defense, Ally.movement, Ally.display_name)
-    f.max_mp = Ally.commander.max_mp()
+    f.max_mp = profile.max_mp()
     f.mp = f.max_mp
     check(f.max_hp == 395 and f.hp == 395 and f.mp == 93,
         "female runtime HP/MP match GDD")

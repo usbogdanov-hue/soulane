@@ -64,7 +64,7 @@ func run_checks() -> void:
     var evade = Combat.skill_attack(board, units, "man", "woman",
         man.special_skill, 0.0, 0.0, 0.0)
     check(bool(evade["ok"]) and bool(evade["evaded"]), "dodge works against extra physical skill")
-    check(woman.hp == 590 and woman.concussion_turns_remaining == 0,
+    check(woman.hp == 690 and woman.concussion_turns_remaining == 0,
         "dodged additional skill does no damage or concussion")
     check(man.mp == 133, "failed-to-hit special attack still consumes 30 MP")
     check(float(evade["concussion_roll"]) == -1.0, "concussion roll skipped on evade")
@@ -73,7 +73,7 @@ func run_checks() -> void:
         man.special_skill, 99.0, 99.0, 32.9)
     check(bool(stun["ok"]) and bool(stun["concussion_applied"]),
         "32.9 roll applies 33% concussion")
-    check(int(stun["damage"]) == 228, "male special damage 120*1.9=228")
+    check(int(stun["damage"]) == 175, "male special damage round(120*1.46)=175")
     check(woman.concussion_turns_remaining == 2, "two future turns pending")
     check(man.mp == 103, "two special attacks consume 60 MP")
 
@@ -88,8 +88,8 @@ func run_checks() -> void:
     var b = woman_duel["board"]
     var u: Dictionary = woman_duel["units"]
     var regular_crit = Combat.melee_attack(b, u, "woman", "man", 99.0, 0.0)
-    check(bool(regular_crit["critical"]) and int(regular_crit["damage"]) == 168,
-        "female passive x2 on basic attack: 84*2 = 168")
+    check(bool(regular_crit["critical"]) and int(regular_crit["damage"]) == 156,
+        "female passive x2 on basic attack: 78*2 = 156")
     var ranged = make_duel(2)
     var ranged_woman = ranged["woman"]
     var ranged_units: Dictionary = ranged["units"]
@@ -103,9 +103,9 @@ func run_checks() -> void:
     var spear = Combat.skill_attack(ranged_board, ranged_units, "woman", "man",
         ranged_woman.special_skill, 99.0, 0.0)
     check(bool(spear["ok"]) and bool(spear["critical"]), "ranged special can critically hit")
-    check(int(spear["damage"]) == 185,
-        "female ranged crit x2: round(110 * 1.4 * 0.6 * 2) = 185")
-    check(ranged_woman.mp == 123, "ranged spear special consumes 25 MP")
+    check(int(spear["damage"]) == 172,
+        "female ranged crit x2: round(110 * 1.30 * 0.6 * 2) = 172")
+    check(ranged_woman.mp == 133, "ranged spear special consumes 25 MP")
     ranged_woman.mp = 0
     var hp_before: int = ranged["man"].hp
     var empty_mana = Combat.skill_attack(ranged_board, ranged_units, "woman", "man",

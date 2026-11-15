@@ -8,6 +8,7 @@ extends Resource
 
 const Rules = preload("res://scripts/combat_rules.gd")
 const Matter = preload("res://scripts/matter_rules.gd")
+const Growth = preload("res://scripts/commander_growth.gd")
 
 const BASES = [
     preload("res://data/commander_bases/male_warrior.tres"),
@@ -61,24 +62,50 @@ const BASES = [
         _refresh_preview()
 
 @export_group("Очки, полученные за уровни")
-@export_range(0, 2994, 1) var points_str: int = 0:
+@export var auto_allocate: bool = true:
     set(value):
-        points_str = clampi(value, 0, maxi(0, mini(45 - int(base_record()["str"]), points_earned() - points_agi - points_wis - points_int)))
+        auto_allocate = value
         _refresh_preview()
 
-@export_range(0, 2994, 1) var points_agi: int = 0:
+var _points_str: int = 0
+var _points_agi: int = 0
+var _points_wis: int = 0
+var _points_int: int = 0
+
+@export_range(0, 2994, 1) var points_str: int:
+    get:
+        if auto_allocate and Growth.supports(archetype):
+            return int(Growth.points(archetype, level)["STR"])
+        return _points_str
     set(value):
-        points_agi = clampi(value, 0, maxi(0, points_earned() - points_str - points_wis - points_int))
+        _points_str = clampi(value, 0, maxi(0, points_earned() - points_agi - points_wis - points_int))
         _refresh_preview()
 
-@export_range(0, 2994, 1) var points_wis: int = 0:
+@export_range(0, 2994, 1) var points_agi: int:
+    get:
+        if auto_allocate and Growth.supports(archetype):
+            return int(Growth.points(archetype, level)["AGI"])
+        return _points_agi
     set(value):
-        points_wis = clampi(value, 0, maxi(0, points_earned() - points_str - points_agi - points_int))
+        _points_agi = clampi(value, 0, maxi(0, points_earned() - points_str - points_wis - points_int))
         _refresh_preview()
 
-@export_range(0, 2994, 1) var points_int: int = 0:
+@export_range(0, 2994, 1) var points_wis: int:
+    get:
+        if auto_allocate and Growth.supports(archetype):
+            return int(Growth.points(archetype, level)["WIS"])
+        return _points_wis
     set(value):
-        points_int = clampi(value, 0, maxi(0, mini(45 - int(base_record()["int"]), points_earned() - points_str - points_agi - points_wis)))
+        _points_wis = clampi(value, 0, maxi(0, points_earned() - points_str - points_agi - points_int))
+        _refresh_preview()
+
+@export_range(0, 2994, 1) var points_int: int:
+    get:
+        if auto_allocate and Growth.supports(archetype):
+            return int(Growth.points(archetype, level)["INT"])
+        return _points_int
+    set(value):
+        _points_int = clampi(value, 0, maxi(0, points_earned() - points_str - points_agi - points_wis))
         _refresh_preview()
 
 
@@ -100,7 +127,7 @@ func _trim_points_to_budget() -> void:
     var old_int: int = points_int
     # Setters учитывают остальные очки: сначала освобождаем весь бюджет,
     # затем возвращаем распределение с приоритетом STR > AGI > WIS > INT.
-    # Те же setters сохраняют ограничения STR/INT при изменении базы.
+    # Изменение базы не ограничивает итоговые STR/INT.
     points_str = 0
     points_agi = 0
     points_wis = 0
@@ -109,6 +136,12 @@ func _trim_points_to_budget() -> void:
     points_agi = old_agi
     points_wis = old_wis
     points_int = old_int
+
+
+func _validate_property(property: Dictionary) -> void:
+    if property.name in ["points_str", "points_agi", "points_wis", "points_int"]:
+        if auto_allocate and Growth.supports(archetype):
+            property.usage |= PROPERTY_USAGE_READ_ONLY
 
 
 func _get_property_list() -> Array[Dictionary]:
@@ -161,7 +194,7 @@ func _get(property: StringName) -> Variant:
         "allocation_state":
             return "OK (очки в пределах бюджета)" if valid_allocation() else "Ошибка распределения"
         "physical_damage_bonus_percent":
-            return minf(90.0, float(primary_stats()["STR"]) * 2.0)
+            return Rules.stat_damage_bonus(float(primary_stats()["STR"]))
         "evasion_percent":
             return Rules.final_evasion(float(primary_stats()["AGI"]) * 0.5 + armor_evasion_bonus())
         "crit_chance_percent":
@@ -171,11 +204,11 @@ func _get(property: StringName) -> Variant:
         "armor_mdef_percent":
             return float(armor_mdef_bonus())
         "magic_power_percent":
-            return minf(90.0, float(primary_stats()["INT"]) * 2.0)
+            return Rules.stat_damage_bonus(float(primary_stats()["INT"]))
         "mana_regen_percent":
             return Rules.cap_chance(float(primary_stats()["WIS"]) * 0.3)
         "magic_resistance_percent":
-            return minf(90.0, float(primary_stats()["WIS"]) * 2.0)
+            return Rules.wis_mdef_bonus(float(primary_stats()["WIS"]))
         "final_mdef_percent":
             return magic_defense_pct()
         "pdef_piercing_percent":
@@ -227,16 +260,16 @@ func points_unspent() -> int:
 
 
 func valid_allocation() -> bool:
-    return points_str >= 0 and points_agi >= 0 and points_wis >= 0 and points_int >= 0 and points_unspent() >= 0 and int(base_record()["str"]) + points_str <= 45 and int(base_record()["int"]) + points_int <= 45
+    return points_str >= 0 and points_agi >= 0 and points_wis >= 0 and points_int >= 0 and points_unspent() >= 0
 
 
 func primary_stats() -> Dictionary:
     var base: Dictionary = base_record()
     return {
-        "STR": mini(45, int(base["str"]) + points_str),
+        "STR": int(base["str"]) + points_str,
         "AGI": int(base["agi"]) + points_agi,
         "WIS": int(base["wis"]) + points_wis,
-        "INT": mini(45, int(base["int"]) + points_int),
+        "INT": int(base["int"]) + points_int,
     }
 
 
@@ -279,7 +312,7 @@ func physical_defense_pct(damage_type: int, effects_pct: float = 0.0) -> float:
 
 func magic_defense_pct(effects_pct: float = 0.0) -> float:
     # Commander base MDEF = 0; WIS protection stacks additively with armor.
-    return Rules.cap_percent(float(armor_mdef_bonus()) + float(primary_stats()["WIS"]) * 2.0 + effects_pct)
+    return Rules.cap_percent(float(armor_mdef_bonus()) + Rules.wis_mdef_bonus(float(primary_stats()["WIS"])) + effects_pct)
 
 
 func max_hp() -> int:

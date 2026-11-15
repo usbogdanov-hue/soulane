@@ -76,8 +76,9 @@ func snapshot(demo) -> Dictionary:
 
 
 func configured_options() -> Dictionary:
-    var options: Dictionary = Build.defaults(Setup.catalog_entry("male"))
-    options.merge({"level": 10, "armor": 0, "STR": 10, "AGI": 5, "WIS": 5, "INT": 7}, true)
+    var base = Setup.catalog_entry("male")
+    var options: Dictionary = Build.resize(base, Build.defaults(base), 10)
+    options.armor = 0
     return options
 
 
@@ -131,20 +132,20 @@ func test_native_edit_apply_and_independence() -> void:
     editor.level_spin.value = 10
     editor.armor_option.select(0)
     editor.armor_option.item_selected.emit(0)
-    editor.point_spins.STR.value = 10
-    editor.point_spins.AGI.value = 5
-    editor.point_spins.WIS.value = 5
-    editor.point_spins.INT.value = 7
+    for attribute in ["STR", "AGI", "WIS", "INT"]:
+        check(not editor.point_spins[attribute].editable,
+            "automatic level points are read-only: " + attribute)
+    editor._on_points_changed(99999, "STR")
     var expected: Dictionary = configured_options()
     check(editor.options == expected and not editor.apply_button.disabled,
-        "level, armor and point control signals create the requested valid build")
+        "level and armor signals create a valid automatically allocated build")
     var preview: Dictionary = Build.preview(original, expected)
     check(editor.preview_label.text.contains("HP %d" % preview.hp)
         and editor.preview_label.text.contains("MP %d" % preview.mp),
         "visible preview reports derived edited HP and MP")
-    check(editor.remaining_label.text.contains("0")
-        and editor.point_spins.AGI.max_value == expected.AGI,
-        "fully allocated budget has no additional AGI available")
+    check(editor.remaining_label.text.contains("27 из 27")
+        and editor.point_spins.AGI.value == expected.AGI,
+        "the full level budget is visibly distributed without manual edits")
     check(code_of(demo.preparation_ui.setup) == draft_before and snapshot(demo) == before,
         "editing controls changes neither preparation nor paused accepted battle")
     check(randi() == next_random, "editor preview and controls consume no combat RNG")
@@ -165,6 +166,10 @@ func test_native_edit_apply_and_independence() -> void:
         "deployment preview still does not commit the edited preparation")
     demo.preparation_ui.start_button.pressed.emit()
     check_runtime_matches(demo.units["ally_1"], preview, "configured male")
+    check(demo.units["ally_1"].max_hp == 575 and demo.units["ally_1"].max_mp == 113
+        and demo.units["ally_1"].attributes == {"STR": 23, "AGI": 16, "WIS": 7, "INT": 9}
+        and is_equal_approx(demo.units["ally_1"].magic_defense_pct(), 7.0),
+        "level-ten warrior uses approved growth and one MDEF point per WIS above its unchanged base")
     check(demo.units["ally_2"].max_hp == original.commander.max_hp()
         and demo.units["ally_2"].max_hp != demo.units["ally_1"].max_hp,
         "fresh battle creates different independent runtime states for duplicate profiles")
@@ -211,13 +216,19 @@ func test_cancel_modal_limits_and_profile_changes() -> void:
         "lowering level trims all earned allocation at level one")
     check(editor.point_spins.STR.max_value == 0 and editor.point_spins.INT.max_value == 0,
         "no earned attribute points can be allocated at level one")
+    editor.level_spin.value = 30
+    var growth_preview: Dictionary = Build.preview(Setup.catalog_entry("male"), editor.options)
+    check(growth_preview.stats.STR > 45 and editor.options.level == 30,
+        "automatic growth can raise STR beyond the removed forty-five cap")
     editor.level_spin.value = 999
-    editor.point_spins.STR.value = 99999
-    editor.point_spins.INT.value = 99999
+    var high_options: Dictionary = editor.options.duplicate(true)
+    editor._on_points_changed(0, "INT")
     var cap_preview: Dictionary = Build.preview(Setup.catalog_entry("male"), editor.options)
-    check(cap_preview.stats.STR == 45 and cap_preview.stats.INT == 45
+    check(cap_preview.stats.STR > 45 and cap_preview.stats.INT > 45
+        and cap_preview.physical_bonus == 90.0 and cap_preview.magic_bonus == 90.0
+        and editor.options == high_options
         and Build.validate(Setup.catalog_entry("male"), editor.options).ok,
-        "native spin controls enforce STR/INT caps even with a large level budget")
+        "high attributes keep their values while damage bonuses alone cap at ninety percent")
     editor.reset_button.pressed.emit()
     check(editor.options == Build.defaults(Setup.catalog_entry("male"))
         and code_of(draft) == untouched,
@@ -257,8 +268,9 @@ func test_partial_save_restore_and_female_kit() -> void:
     demo.preparation_ui.setup.set_arena("gates")
     demo.preparation_ui.setup.place_unit("ally_1", Vector2i(0, 0))
     var male: Dictionary = configured_options()
-    var female: Dictionary = Build.defaults(Setup.catalog_entry("female"))
-    female.merge({"level": 10, "armor": 2, "STR": 5, "AGI": 10, "WIS": 6, "INT": 6}, true)
+    var female_base_stats = Setup.catalog_entry("female")
+    var female: Dictionary = Build.resize(female_base_stats, Build.defaults(female_base_stats), 10)
+    female.armor = 2
     apply_options(demo, "ally_1", male)
     apply_options(demo, "ally_2", female)
     var chosen: String = code_of(demo.preparation_ui.setup)

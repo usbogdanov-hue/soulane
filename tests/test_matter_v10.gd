@@ -17,7 +17,7 @@ var failures: int = 0
 func _initialize() -> void:
     test_majority()
     test_profiles()
-    test_hard_caps()
+    test_uncapped_stats()
     test_matter_damage()
     test_combat_and_magic()
     if failures == 0:
@@ -35,6 +35,20 @@ func check(ok: bool, label: String) -> void:
 
 func near(a: float, b: float) -> bool:
     return absf(a - b) < 0.001
+
+func manual_profile(original):
+    var profile = original.duplicate(false)
+    profile.auto_allocate = false
+    profile.points_str = 0
+    profile.points_agi = 0
+    profile.points_wis = 0
+    profile.points_int = 0
+    return profile
+
+func manual_stats(original):
+    var stats = original.duplicate(false)
+    stats.commander = manual_profile(original.commander)
+    return stats
 
 func test_majority() -> void:
     check(Matter.resolve([]) == Matter.NEUTRAL, "no matter is neutral")
@@ -63,6 +77,7 @@ func test_profiles() -> void:
     var water = Item.new()
     water.matter = Matter.WATER
     var p = Profile.new()
+    p.auto_allocate = false
     p.archetype = 1
     check(p.resolved_matter() == Matter.NEUTRAL, "no class matter or items")
     var one_water: Array[Resource] = [water]
@@ -85,17 +100,18 @@ func test_profiles() -> void:
     check(Ally.commander.resolved_matter() == Matter.WATER, "demo female fire+2 water resolved water")
     check(Enemy.commander.resolved_matter() == Matter.FIRE, "neutral male + fire item resolved fire")
 
-func test_hard_caps() -> void:
+func test_uncapped_stats() -> void:
     var p = Profile.new()
+    p.auto_allocate = false
     p.archetype = 1
-    p.level = 30
+    p.level = 100
     p.points_str = 100
-    check(p.primary_stats()["STR"] == 45 and p.points_str == 37, "STR can't exceed 45")
+    check(p.primary_stats()["STR"] == 108 and p.points_str == 100, "STR can exceed forty-five")
     p.points_int = 100
-    check(p.primary_stats()["INT"] == 45 and p.points_int == 41, "INT can't exceed 45")
-    check(p.valid_allocation() and p.points_unspent() == 9, "remaining points aren't silently discarded")
-    check(p.max_hp() == 270 + 145 + 45 * 10, "HP computed from capped STR")
-    check(p.max_mp() == 55 + 58 + 45 * 5, "MP computed from capped INT")
+    check(p.primary_stats()["INT"] == 104 and p.points_int == 100, "INT can exceed forty-five")
+    check(p.valid_allocation() and p.points_unspent() == 97, "remaining points aren't silently discarded")
+    check(p.max_hp() == 270 + 495 + 108 * 10, "HP uses full STR above the damage bonus cap")
+    check(p.max_mp() == 55 + 198 + 104 * 5, "MP uses full INT above the damage bonus cap")
 
 func test_matter_damage() -> void:
     check(Damage.physical_damage(100, 40.0, 20.0, 1.0, -15.0) == 100,
@@ -119,8 +135,8 @@ func test_matter_damage() -> void:
 
 func test_combat_and_magic() -> void:
     var demo = Demo.new()
-    var f = demo.make_unit("A", "blue", Ally)
-    var m = demo.make_unit("E", "red", Enemy)
+    var f = demo.make_unit("A", "blue", manual_stats(Ally))
+    var m = demo.make_unit("E", "red", manual_stats(Enemy))
     check(f.matter == Matter.WATER and m.matter == Matter.FIRE, "runtime uses resolved commander matter")
     check(f.spell_matter == Matter.DARK and m.spell_matter == Matter.FIRE,
         "magic matter comes from book and ignores commander/equipment")
@@ -133,14 +149,14 @@ func test_combat_and_magic() -> void:
     check(hit.get("critical", false), "forced physical crit")
     check(near(hit.get("critical_multiplier", 0.0), 1.5), "physical critical coefficient 1.5")
     check(near(hit.get("pdef_percent", 0.0), -5.0), "water attack reduces fire PDEF by 15pp")
-    check(hit.get("damage", 0) == 15, "skill8, STR8, PDEF-5, crit1.5 => 15")
+    check(hit.get("damage", 0) == 14, "skill8, STR8 at1%, PDEF-5, crit1.5 => 14")
     var hp_before: int = m.hp
     var mana_before: int = f.mp
     var magic: Dictionary = Combat.magic_attack(board, units, "A", "E")
     check(magic.get("ok", false) and not magic.get("critical", true), "magic never critical")
     check(magic.get("attack_matter", -1) == Matter.DARK, "dark book defines attack matter")
     check(magic.get("damage", 0) == 18 and m.hp == hp_before - 18,
-        "magic power20, INT4, target MDEF18 => 18 damage")
+        "magic power20, INT4 at1%, target MDEF14 => 18 damage")
     check(f.mp == mana_before - 10, "spell spends exactly 10 MP")
     f.mp = 0
     var fail: Dictionary = Combat.magic_attack(board, units, "A", "E")

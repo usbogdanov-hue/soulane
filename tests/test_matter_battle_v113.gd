@@ -113,7 +113,7 @@ func test_native_matter_controls() -> void:
         and not editor._ability_label.text.contains(original.magic_spell.display_name),
         "ability description follows changed book without retaining the old elemental name")
     check(editor.status_label.text.contains("WIS") and editor.status_label.text.contains("MDEF")
-        and editor.status_label.text.contains("регенерацию MP"), "WIS help retains defense and MP regeneration")
+        and editor.status_label.text.contains("регенераци"), "WIS help retains defense and MP regeneration")
     editor.level_spin.value = 1
     check(editor.options.class_matter == Matter.FIRE and editor.options.book == "wind"
         and editor.options.equipment == chosen.equipment, "changing level preserves all matter controls")
@@ -266,8 +266,8 @@ func test_partial_save_import_restart() -> void:
     demo.library_ui.save_button.pressed.emit()
     demo.library_ui.export_button.pressed.emit()
     var exported: String = demo.library_ui.code_edit.text
-    check(exported == chosen and JSON.parse_string(exported).version == 4,
-        "native export writes v4 selected matter and books for a partial team")
+    check(exported == chosen and JSON.parse_string(exported).version == 5,
+        "native export writes v5 selected matter and books for a partial team")
     demo.close_setup_library()
     start(demo)
     check(demo.units.size() == 5 and demo.units.ally_1.matter == Matter.WATER
@@ -277,12 +277,12 @@ func test_partial_save_import_restart() -> void:
     demo.open_preparation()
     demo.preparation_ui.setup.reset_commander_options("ally_1")
     check(demo.import_setup_code(exported) and code(demo.preparation_ui.setup) == chosen
-        and code(demo.team_setup) == chosen, "v4 import restores selected choices into the draft")
+        and code(demo.team_setup) == chosen, "v5 import restores selected choices into the draft")
     demo.free()
     var restored = new_scene(path)
     check(restored.preparing and code(restored.team_setup) == chosen
         and restored.units.size() == 5 and restored.units.ally_1.spell_matter == Matter.LIGHT,
-        "new scene restores last accepted v4 partial composition with selected book")
+        "new scene restores last accepted v5 partial composition with selected book")
     restored.open_setup_library()
     check(restored.load_library_slot(1) and code(restored.preparation_ui.setup) == chosen
         and restored.setup_store.list_slots()[1].name == "Материи 2×3",
@@ -295,18 +295,21 @@ func test_actual_v3_library_upgrade() -> void:
     paths.append(path)
     var setup = Setup.new()
     setup.set_enabled("ally_3", false)
-    var male: Dictionary = Build.defaults(Setup.catalog_entry("male"))
-    male.merge({"level": 10, "armor": 0, "STR": 10, "AGI": 5, "WIS": 5, "INT": 7}, true)
-    var female: Dictionary = Build.defaults(Setup.catalog_entry("female"))
-    female.merge({"level": 10, "armor": 2, "STR": 5, "AGI": 10, "WIS": 6, "INT": 6}, true)
+    var male_base = Setup.catalog_entry("male")
+    var female_base = Setup.catalog_entry("female")
+    var male: Dictionary = Build.resize(male_base, Build.defaults(male_base), 10)
+    male.armor = 0
+    var female: Dictionary = Build.resize(female_base, Build.defaults(female_base), 10)
+    female.armor = 2
     setup.set_commander_options("ally_1", male)
     setup.set_commander_options("ally_2", female)
     var old: Dictionary = Codec.encode(setup).data
     old.version = 3
     for row in old.units:
-        if row.commander != null:
-            for field in ["class_matter", "equipment", "book"]:
-                row.commander.erase(field)
+        if row.id == "ally_1":
+            row.commander = {"level": 10, "armor": 0, "STR": 10, "AGI": 5, "WIS": 5, "INT": 7}
+        elif row.id == "ally_2":
+            row.commander = {"level": 10, "armor": 2, "STR": 5, "AGI": 10, "WIS": 6, "INT": 6}
     var file := FileAccess.open(path, FileAccess.WRITE)
     file.store_string(JSON.stringify({"format": "suleyn.library", "version": 1,
         "last_setup": old, "slots": [{"name": "Прежние 2×3", "setup": old}, null, null]}))
@@ -315,14 +318,18 @@ func test_actual_v3_library_upgrade() -> void:
     check(demo.preparing and demo.units.size() == 5
         and demo.team_setup.current_commander_options("ally_1") == male
         and demo.team_setup.current_commander_options("ally_2") == female,
-        "actual scene upgrades genuine v3 six-field builds in partial last setup")
+        "actual scene recalculates genuine v3 manual six-field builds to automatic growth")
     check(demo.units.ally_1.matter == Matter.NEUTRAL and demo.units.ally_1.spell_matter == Matter.FIRE
         and demo.units.ally_2.matter == Matter.NEUTRAL and demo.units.ally_2.spell_matter == Matter.DARK,
         "legacy migration preserves original body and book matter for both warriors")
+    check(demo.units.ally_1.max_hp == 575 and demo.units.ally_1.max_mp == 113
+        and demo.units.ally_1.attributes == {"STR": 23, "AGI": 16, "WIS": 7, "INT": 9}
+        and is_equal_approx(demo.units.ally_1.magic_defense_pct(), 7.0),
+        "legacy builds receive approved automatic growth and current one-point WIS defense")
     demo.open_commander_editor("ally_1")
     var editor = demo.commander_editor
     check(editor.level_spin.value == 10 and editor.options == male,
-        "native editor opens migrated allocation without losing level or points")
+        "native editor opens recalculated growth while preserving the old level and armor")
     editor.tab_buttons.matter.pressed.emit()
     select(editor.class_matter_option, Matter.LIGHT)
     select(editor.book_option, Build.BOOK_KEYS.find("water"))
@@ -334,8 +341,8 @@ func test_actual_v3_library_upgrade() -> void:
         and demo.units.ally_1.spell_matter == Matter.WATER,
         "Start accepts new source and book while retaining migrated numeric build")
     var raw: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(path))
-    check(raw.version == 1 and raw.last_setup.version == 4,
-        "autosave upgrades setup payload to v4 inside unchanged library wrapper")
+    check(raw.version == 1 and raw.last_setup.version == 5,
+        "autosave upgrades setup payload to v5 inside unchanged library wrapper")
     demo.free()
     var reader = Store.new(path)
     check(reader.load_library().ok and reader.list_slots()[0].name == "Прежние 2×3"
@@ -345,7 +352,7 @@ func test_actual_v3_library_upgrade() -> void:
     var restored = new_scene(path)
     check(restored.units.ally_1.matter == Matter.LIGHT and restored.units.ally_1.spell_matter == Matter.WATER
         and restored.units.ally_2.spell_matter == Matter.DARK,
-        "fresh actual scene restores new v4 matter choices alongside unchanged second warrior")
+        "fresh actual scene restores new v5 matter choices alongside unchanged second warrior")
     restored.free()
 
 
