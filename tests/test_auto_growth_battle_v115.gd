@@ -8,7 +8,6 @@ const Demo = preload("res://scripts/battle_demo.gd")
 const Scene = preload("res://scenes/battle_demo.tscn")
 const Setup = preload("res://scripts/battle_setup.gd")
 const Codec = preload("res://scripts/setup_codec.gd")
-const Passive = preload("res://data/passives/female_critical_x2.tres")
 const Matter = preload("res://scripts/matter_rules.gd")
 var checks: int = 0
 var failures: int = 0
@@ -28,9 +27,10 @@ func stats_for(archetype: int, level: int, armor: int):
     profile.archetype = archetype
     profile.level = level
     profile.armor_type = armor
-    if archetype == 1:
-        profile.critical_passive = Passive
     stats.commander = profile
+    stats.melee_skill = null
+    stats.special_skill = null
+    stats.magic_spell = null
     return stats
 
 func test_four_level30_profiles() -> void:
@@ -38,7 +38,7 @@ func test_four_level30_profiles() -> void:
         {"archetype":0,"armor":3,"attributes":{"STR":53,"AGI":34,"WIS":13,"INT":15},
             "hp":975,"mp":183,"pdef":[40.0,30.0,20.0],"mdef":13.0,"evade":7.0,"crit":17.0,"mult":1.5,"regen":3.9,"first":7},
         {"archetype":1,"armor":2,"attributes":{"STR":34,"AGI":45,"WIS":23,"INT":13},
-            "hp":755,"mp":178,"pdef":[20.0,10.0,20.0],"mdef":33.0,"evade":22.5,"crit":22.5,"mult":2.0,"regen":6.9,"first":12},
+            "hp":755,"mp":178,"pdef":[20.0,10.0,20.0],"mdef":33.0,"evade":22.5,"crit":22.5,"mult":1.5,"regen":6.9,"first":12},
         {"archetype":4,"armor":1,"attributes":{"STR":14,"AGI":14,"WIS":34,"INT":53},
             "hp":435,"mp":423,"pdef":[0.0,0.0,0.0],"mdef":54.0,"evade":17.0,"crit":7.0,"mult":1.5,"regen":10.2,"first":43},
         {"archetype":5,"armor":1,"attributes":{"STR":13,"AGI":15,"WIS":53,"INT":34},
@@ -52,6 +52,10 @@ func test_four_level30_profiles() -> void:
         var unit = demo.make_unit("fixture", "blue", Build.materialize(stats, descriptor))
         var profile = stats.commander
         var label: String = "archetype " + str(row.archetype)
+        check(profile.critical_passive == null and stats.melee_skill == null
+            and stats.special_skill == null and stats.magic_spell == null
+            and unit.special_skill == null and unit.spell_power == 0,
+            "baseline comparison contains no active skills or passives: " + label)
         check(profile.primary_stats() == row.attributes and unit.attributes == row.attributes and preview.stats == row.attributes,
             "level30 attributes agree across profile, preview and runtime: " + label)
         check(profile.points_earned() == 87 and profile.points_spent() == 87 and profile.points_unspent() == 0,
@@ -67,7 +71,7 @@ func test_four_level30_profiles() -> void:
         check(is_equal_approx(unit.final_evasion_pct(), row.evade) and is_equal_approx(preview.evasion, row.evade),
             "armor modifies the existing AGI evasion formula: " + label)
         check(unit.crit_chance_pct == row.crit and unit.critical_multiplier == row.mult,
-            "physical crit retains its AGI chance and assigned passive only: " + label)
+            "physical crit uses AGI chance and universal baseline multiplier without passives: " + label)
         check(unit.physical_defense_pct(0) == row.pdef[0] and unit.physical_defense_pct(1) == row.pdef[1]
             and unit.physical_defense_pct(2) == row.pdef[2], "armor defenses remain type specific: " + label)
         check(unit.physical_resistance_pct == 0.0 and unit.base_pdef_pct == 0.0 and unit.base_mdef_pct == 0.0,
